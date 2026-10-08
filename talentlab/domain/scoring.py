@@ -10,6 +10,8 @@ Le « potentiel » est une borne haute à confirmer, jamais une compétence acqu
 """
 from __future__ import annotations
 
+import time
+
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -17,7 +19,7 @@ from typing import Any
 from . import grid as gd
 from .cv_extract import ParsedCV
 from .enums import ConstraintStatus, Level, LEVEL_ORDER, Tier
-from .evidence import CritEvidence, EvalConfig, ExtEvidence, evaluate_text_criterion, merge_external, skill_for
+from .evidence import AnalysisTimeout, CritEvidence, EvalConfig, ExtEvidence, evaluate_text_criterion, merge_external, skill_for
 
 ENGINE_VERSION = "scoring-1.0"
 
@@ -226,17 +228,19 @@ def evaluate_constraints(grid: gd.Grid, facts: CandidateFacts, parsed: ParsedCV 
 
 # ----------------------------------------------------------------- évaluation complète
 def assess(grid: gd.Grid, parsed: ParsedCV, ext: dict[str, list[ExtEvidence]] | None = None, facts: CandidateFacts | None = None,
-           *, today: date | None = None, security_flags: list[dict[str, Any]] | None = None) -> Assessment:
+           *, today: date | None = None, security_flags: list[dict[str, Any]] | None = None, deadline: float | None = None) -> Assessment:
     gd.assert_unchanged(grid)
     if grid.status != "frozen":
         raise gd.GridError(["Une évaluation exige une grille figée et validée par un recruteur (critères identiques pour tous les candidats)."])
     ext = ext or {}
     facts = facts or CandidateFacts()
-    cfg = EvalConfig(today=today or date.today(), recency_window_years=grid.recency_window_years)
+    cfg = EvalConfig(today=today or date.today(), recency_window_years=grid.recency_window_years, deadline=deadline)
     ev_by_key: dict[str, CritEvidence] = {}
     for c in grid.criteria:
         if c.members or c.key.startswith("group:") or c.dimension == "contrainte" or c.kind in ("language", "constraint"):
             continue
+        if deadline is not None and time.monotonic() > deadline:
+            raise AnalysisTimeout()
         ev_by_key[c.key] = _eval_crit(c, parsed, ext, cfg)
     results: list[CriterionResult] = []
     factors = grid.factors

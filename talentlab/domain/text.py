@@ -9,17 +9,18 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 _HYPHENS = "\u2010\u2011\u2012\u2212"
-_SPACES = "\u00a0\u202f\u2009\u2007"
 
 
+@lru_cache(maxsize=1 << 16)
 def _fold_char(c: str) -> str:
     if c in _HYPHENS:
         return "-"                                  # « e‑commerce » (trait d'union insécable) = « e-commerce »
-    if c in _SPACES:
-        return " "
+    if c.isspace() and c != "\n":
+        return " "                                  # tout espace Unicode (U+2003, U+00A0, U+202F…) devient un espace simple : même longueur
     d = unicodedata.normalize("NFD", c)
     base = d[0] if d else c
     low = base.lower()
@@ -27,11 +28,22 @@ def _fold_char(c: str) -> str:
 
 
 def fold(text: str) -> str:
-    """Minuscules sans accents, longueur identique à l'entrée."""
-    return "".join(_fold_char(c) for c in text)
+    """Minuscules sans accents, longueur identique à l'entrée ; tout espace Unicode (hors saut de ligne) devient un espace simple."""
+    if text.isascii():
+        return text.lower().replace("\t", " ").replace("\r", " ").replace("\x0b", " ").replace("\x0c", " ")
+    return "".join(map(_fold_char, text))
 
 
-_WS = re.compile(r"[ \t ]+")
+_MULTI_WS = re.compile(r"\s+")
+
+
+def fold_compact(text: str) -> str:
+    """``fold`` + espaces compactés : pour les extractions de champs (TJM, durée, langues…) où seules les VALEURS comptent, pas les positions.
+    Un motif à plusieurs ``\\s*`` consécutifs est quadratique sur une longue suite d'espaces : on la ramène à un seul."""
+    return _MULTI_WS.sub(" ", fold(text))
+
+
+_WS = re.compile(r"[^\S\n]+")             # tout espace Unicode sauf le saut de ligne (U+2003, U+00A0, U+202F…)
 
 
 def normalize_text(text: str) -> str:
@@ -86,6 +98,7 @@ def _push(spans: list[Span], seg: str, start: int) -> None:
 _SEP = r"[\s\-_/]*"
 
 
+@lru_cache(maxsize=1 << 14)
 def term_pattern(term: str) -> str:
     """Motif regex (sur texte replié) pour un terme, avec frontières de mots.
 

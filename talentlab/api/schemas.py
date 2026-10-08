@@ -18,7 +18,7 @@ class DevLogin(Strict):
 class MissionIn(Strict):
     client: str = Field(default="", max_length=200)
     title: str = Field(min_length=2, max_length=300)
-    brief: str = Field(min_length=1, max_length=60_000)
+    brief: str = Field(min_length=1, max_length=30_000)
     source_date: date | None = None
     author: str = Field(default="", max_length=200)
 

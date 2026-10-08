@@ -146,6 +146,22 @@ def create_mission(body: S.MissionIn, db: Session = Depends(get_db), user: User 
     return mission_view(db, m, "owner", user)
 
 
+def grid_drift(db: Session, m: Mission, reqs) -> dict[str, Any] | None:
+    """Le besoin a-t-il changé depuis la grille figée ? Les scores restent calculés sur la grille figée (jamais modifiée en silence) :
+    l'écart est SIGNALÉ pour qu'une nouvelle version, motivée et tracée, soit créée."""
+    frozen = ms.latest_frozen(db, m.id)
+    if frozen is None:
+        return None
+    try:
+        d = gd.diff(ms.grid_from_row(frozen), gd.propose_grid(m.id, reqs, version=frozen.version + 1))
+    except Exception:                      # noqa: BLE001 — pas d'exigence notable : rien à comparer
+        return None
+    changed = [c for c in d["changed"] if c["from"]["category"] != c["to"]["category"] or c["from"]["depth"] != c["to"]["depth"]]
+    if not (d["added"] or d["removed"] or changed):
+        return None
+    return {"from_version": frozen.version, "added": d["added"], "removed": d["removed"], "changed": changed}
+
+
 def mission_view(db: Session, m: Mission, level: str, user: User) -> dict[str, Any]:
     reqs, conflicts = ms.effective(db, m.id)
     base = mission_summary(db, m, level)
@@ -163,6 +179,7 @@ def mission_view(db: Session, m: Mission, level: str, user: User) -> dict[str, A
         "effective_requirement_ids": [r.id for r in reqs],
         "conflicts": [c.__dict__ for c in conflicts],
         "grids": [grid_dict(g) for g in db.scalars(select(Grid).where(Grid.mission_id == m.id).order_by(Grid.version))],
+        "grid_drift": grid_drift(db, m, reqs),
         "knowledge_suggestions": kn.suggest_for_mission(db, m, [r.key for r in reqs]),
     })
     return base

@@ -15,6 +15,7 @@ Distinctions essentielles (§5.3) :
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .text import fold, term_pattern
 import re
@@ -108,12 +109,9 @@ def _alias_regex(alias: str, cs: bool) -> re.Pattern[str]:
 _ALIAS_CACHE: dict[tuple[str, str], list[re.Pattern[str]]] = {}
 
 
-def _patterns(sk: Skill) -> list[tuple[str, bool, re.Pattern[str]]]:
-    out = []
-    for a in sk.aliases:
-        cs = a in sk.case_sensitive
-        out.append((a, cs, _alias_regex(a, cs)))
-    return out
+@lru_cache(maxsize=4096)
+def _patterns(sk: Skill) -> tuple[tuple[str, bool, re.Pattern[str]], ...]:
+    return tuple((a, a in sk.case_sensitive, _alias_regex(a, a in sk.case_sensitive)) for a in sk.aliases)
 
 
 def mentions(sk: Skill, text: str, folded: str | None = None, window: int = 160) -> list[tuple[int, int, str]]:

@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import update, select
 from sqlalchemy.orm import Session
 
 from .. import audit
@@ -180,9 +180,17 @@ def handle(db: Session, user: User, m: Mission, level: str, message: str, *, can
     return reply
 
 
-def confirm(db: Session, user: User, m: Mission, p: Proposal) -> dict[str, Any]:
-    if p.status != "pending":
+def _claim(db: Session, p: Proposal, status: str) -> None:
+    """Réservation ATOMIQUE de la décision : « UPDATE … WHERE status = 'pending' ». Deux confirmations simultanées ne s'appliquent jamais deux fois :
+    la seconde ne trouve plus la proposition « en attente » (409). Si l'application échoue ensuite, la transaction est annulée et la réservation avec elle."""
+    res = db.execute(update(Proposal).where(Proposal.id == p.id, Proposal.status == "pending").values(status=status))
+    if res.rowcount != 1:
         raise HTTPException(409, "Proposition déjà traitée.")
+    db.refresh(p)
+
+
+def confirm(db: Session, user: User, m: Mission, p: Proposal) -> dict[str, Any]:
+    _claim(db, p, "confirmed")
     result: dict[str, Any] = {}
     if p.kind == "requirement_change":
         row = ms.apply_requirement_proposal(db, user, m, p)
@@ -206,7 +214,6 @@ def confirm(db: Session, user: User, m: Mission, p: Proposal) -> dict[str, Any]:
 
 
 def reject(db: Session, user: User, m: Mission, p: Proposal) -> None:
-    if p.status != "pending":
-        raise HTTPException(409, "Proposition déjà traitée.")
+    _claim(db, p, "rejected")
     p.status, p.decided_by, p.decided_at = "rejected", user.id, now()
     audit.log(db, user.id, "proposal.reject", "proposal", p.id, m.id, kind=p.kind)

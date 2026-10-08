@@ -17,7 +17,7 @@ from typing import Any
 from . import lexicon as lx
 from .enums import Category, SourceKind
 from .requirements import Req, new_id
-from .text import fold, find_term, normalize_text
+from .text import fold, find_term, normalize_text, fold_compact
 
 _NUM_WORDS = {"un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7, "huit": 8, "neuf": 9, "dix": 10}
 
@@ -155,7 +155,7 @@ def _num(s: str) -> int | None:
 
 
 def extract_modalities(text: str) -> dict[str, Any]:
-    f = fold(text)
+    f = fold_compact(text)
     m: dict[str, Any] = {}
     if x := re.search(r"(\d)\s*jours?\s*(?:par semaine\s*|/\s*semaine\s*)?(?:sur site|sur place|en presentiel|de presence)", f):
         m["onsite_days_per_week"] = int(x.group(1))
@@ -221,7 +221,7 @@ def analyze_brief(title: str, brief: str, *, source_ref: str = "brief", source_k
 
     section_keys: dict[str, list[str]] = {}
     for section, sent, _off in blocks:
-        f = fold(sent)
+        f = fold_compact(sent)
         sk_kind = source_kind
         if _CLIENT_CONFIRMED.search(f):
             sk_kind = SourceKind.CLIENT_CONFIRMED_IMPERATIVE
@@ -311,7 +311,7 @@ def analyze_brief(title: str, brief: str, *, source_ref: str = "brief", source_k
 
     # ancienneté demandée
     for sent_section, sent, _ in blocks:
-        f = fold(sent)
+        f = fold_compact(sent)
         if m := re.search(r"(\d{1,2})\s*(?:a\s*\d{1,2}\s*)?\+?\s*(?:ans|annees|years)", f):
             if re.search(r"experience|exp\b|minimum|au moins|seniorite|years", f) and not re.search(r"duree|mission de|renouvel", f):
                 yrs = float(m.group(1))

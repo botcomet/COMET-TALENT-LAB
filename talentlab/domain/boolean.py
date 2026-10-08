@@ -156,10 +156,15 @@ def tokenize(q: str) -> tuple[list[tuple[str, str, int]], list[Issue]]:
     return toks, issues
 
 
+MAX_DEPTH = 24            # une requête réelle dépasse rarement 3 niveaux ; au-delà, c'est une erreur (et une défense contre la récursion)
+
+
 class _Parser:
     def __init__(self, toks, issues):
         self.t, self.i, self.issues = toks, 0, issues
         self.mixed = False
+        self.depth = 0
+        self.too_deep = False
 
     def peek(self):
         return self.t[self.i][0] if self.i < len(self.t) else None
@@ -220,11 +225,21 @@ class _Parser:
             return Term(self.eat()[1])
         if p == "(":
             start = self.eat()[2]
+            if self.depth >= MAX_DEPTH:
+                if not self.too_deep:
+                    self.issues.append(Issue("TOO_DEEP", "error", f"Plus de {MAX_DEPTH} niveaux de parenthèses imbriquées : requête illisible pour la plateforme.", start))
+                self.too_deep = True
+                self.i = len(self.t)                       # arrête l'analyse : aucune récursion supplémentaire
+                return None
             if self.peek() == ")":
                 self.eat()
                 self.issues.append(Issue("EMPTY_GROUP", "error", "Parenthèses vides.", start))
                 return None
-            inner = self.parse_or()
+            self.depth += 1
+            try:
+                inner = self.parse_or()
+            finally:
+                self.depth -= 1
             if self.peek() == ")":
                 self.eat()
             else:

@@ -16,6 +16,8 @@ export async function renderMission(main, id, tab, sub) {
       m.client ? chip(m.client, 'grey') : null, chip(m.access === 'owner' ? 'Propriétaire' : `Accès : ${m.access}`, 'blue'), m.grid_version ? chip(`Grille v${m.grid_version} figée`, 'ok') : chip('Grille non figée', 'warn'),
       strategyOnly ? null : h('button', { id: 'open-assistant', onclick: () => { renderAssistant(m, ctx.reload); $('#assistant').hidden = false; $('#assistant-input').focus(); } }, 'Assistant')),
     strategyOnly ? h('div', { class: 'alert blue' }, 'Vous avez accès à la stratégie de sourcing de cette mission (recherches et explications) — aucune donnée candidat n’est partagée.') : null,
+    m.grid_drift ? h('div', { class: 'alert warn', id: 'grid-drift' }, h('b', {}, `Le besoin a changé depuis la grille v${m.grid_drift.from_version} : `),
+      `${m.grid_drift.added.length} critère(s) ajouté(s), ${m.grid_drift.removed.length} retiré(s), ${m.grid_drift.changed.length} modifié(s). Les scores restent calculés sur la grille v${m.grid_drift.from_version} (figée) — créer une nouvelle version, motivée et tracée, pour en tenir compte.`) : null,
     h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([k, l]) => h('button', { role: 'tab', 'aria-selected': String(k === tab), id: `tab-${k}`, onclick: () => { location.hash = `#/mission/${id}/${k}`; } }, l))),
     h('div', { id: 'tabpane', role: 'tabpanel' }));
   const pane = $('#tabpane');

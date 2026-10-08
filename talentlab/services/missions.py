@@ -14,6 +14,7 @@ from ..domain import lexicon as lx
 from ..domain.brief import analyze_brief
 from ..domain.call_facts import extract_facts
 from ..domain.enums import Category, SourceKind, SOURCE_RANK
+from ..domain.text import fold
 from ..domain.requirements import Conflict, Req, new_id, resolve
 from ..models import Grid, KnowledgeEntry, Mission, MissionSource, Proposal, Requirement, User, now
 
@@ -104,7 +105,6 @@ _NEG_FEEDBACK = ("insuffisant", "pas assez", "manque", "trop faible", "refuse", 
 
 
 def _propose_lesson(db: Session, user: User, m: Mission, text: str) -> None:
-    from ..domain.text import fold
     f = fold(text)
     if not any(fold(w) in f for w in _NEG_FEEDBACK):
         return
@@ -188,11 +188,8 @@ def update_requirement(db: Session, user: User, m: Mission, req_id: str, changes
             if v not in ("active", "rejected"):
                 raise _bad("Statut invalide.")
         setattr(r, k, v)
-    if r.category == Category.ELIMINATOIRE:
-        if r.source_kind not in (SourceKind.CLIENT_CONFIRMED_IMPERATIVE, SourceKind.CLIENT_CLARIFICATION):
-            raise _bad("Un critère éliminatoire doit être explicitement confirmé par le client : renseigner la source « impératif client confirmé » ou « précision client validée ».")
-        if not r.quote.strip():
-            raise _bad("Un critère éliminatoire doit citer l'extrait de la confirmation client.")
+    if err := eliminatory_trace_error(db, m, r):
+        raise _bad(err)
     if r.depth_required not in ("practice", "advanced"):
         raise _bad("Profondeur invalide.")
     r.validated, r.validated_by = True, user.id
@@ -201,6 +198,30 @@ def update_requirement(db: Session, user: User, m: Mission, req_id: str, changes
               before={k: (v.value if hasattr(v, "value") else v) for k, v in before.items()},
               after={k: (getattr(r, k).value if hasattr(getattr(r, k), "value") else getattr(r, k)) for k in before})
     return row
+
+
+_CLIENT_SOURCES = (SourceKind.CLIENT_CONFIRMED_IMPERATIVE, SourceKind.CLIENT_CLARIFICATION)
+
+
+def _norm(t: str) -> str:
+    return " ".join(fold(t).split())
+
+
+def eliminatory_trace_error(db: Session, m: Mission, r: Req) -> str | None:
+    """« Éliminatoire » exige une confirmation client TRACÉE : source client déclarée ET extrait retrouvé mot pour mot dans une source enregistrée
+    de la mission (brief, précision client, note de brief). Une citation inventée ne trace rien."""
+    if r.category != Category.ELIMINATOIRE:
+        return None
+    if r.source_kind not in _CLIENT_SOURCES:
+        return "Un critère éliminatoire doit être explicitement confirmé par le client : renseigner la source « impératif client confirmé » ou « précision client validée »."
+    q = _norm(r.quote or "")
+    if len(q) < 12:
+        return "Un critère éliminatoire doit citer l'extrait de la confirmation client (12 caractères au moins)."
+    for src in db.scalars(select(MissionSource).where(MissionSource.mission_id == m.id)):
+        if q in _norm(src.text):
+            return None
+    return ("L'extrait cité ne figure dans aucune source enregistrée de la mission : ajouter d'abord la source (brief, précision client datée) "
+            "puis citer l'extrait exact — une confirmation client doit être traçable.")
 
 
 def add_requirement(db: Session, user: User, m: Mission, data: dict[str, Any]) -> Requirement:
@@ -220,8 +241,8 @@ def add_requirement(db: Session, user: User, m: Mission, data: dict[str, Any]) -
             source_kind=SourceKind(data.get("source_kind", SourceKind.OFFICIAL_BRIEF.value)), source_ref="saisie", source_date=date.today(),
             source_author=user.display_name, quote=str(data.get("quote", ""))[:300], rationale="Ajout manuel par un recruteur.",
             validated=True, validated_by=user.id, proposed_by="user")
-    if r.category == Category.ELIMINATOIRE and (r.source_kind not in (SourceKind.CLIENT_CONFIRMED_IMPERATIVE, SourceKind.CLIENT_CLARIFICATION) or not r.quote):
-        raise _bad("Un critère éliminatoire doit être confirmé par le client (source et extrait obligatoires).")
+    if err := eliminatory_trace_error(db, m, r):
+        raise _bad(err)
     row = _save_req(db, m.id, r)
     audit.log(db, user.id, "requirement.add", "requirement", r.id, m.id, key=key, category=r.category.value)
     return row
@@ -233,8 +254,8 @@ def validate_requirements(db: Session, user: User, m: Mission, ids: list[str] | 
         r = req_from_row(row)
         if r.status != "active" or r.validated or (ids is not None and r.id not in ids):
             continue
-        if r.category == Category.ELIMINATOIRE and (r.source_kind not in (SourceKind.CLIENT_CONFIRMED_IMPERATIVE, SourceKind.CLIENT_CLARIFICATION) or not r.quote):
-            continue          # jamais validé en bloc : exige la confirmation client tracée
+        if eliminatory_trace_error(db, m, r):
+            continue          # jamais validé en bloc : exige la confirmation client tracée (source client + extrait retrouvé dans une source de la mission)
         r.validated, r.validated_by = True, user.id
         _save_req(db, m.id, r, row=row)
         n += 1
@@ -309,7 +330,11 @@ def update_grid(db: Session, user: User, m: Mission, grid_id: str, weights: dict
                 raise _bad(f"Seuil inconnu : {k}")
             g.thresholds[k] = int(v)
     if recency_window_years is not None:
+        if not 1 <= int(recency_window_years) <= 40:
+            raise _bad("La fenêtre de récence est comprise entre 1 et 40 ans.")
         g.recency_window_years = int(recency_window_years)
+    if errs := gd.parameter_errors(g):
+        raise _bad(" ; ".join(errs))
     row.data = g.canonical()
     db.flush()
     audit.log(db, user.id, "grid.update", "grid", row.id, m.id, before=before, after={c.key: c.weight for c in g.scored()})

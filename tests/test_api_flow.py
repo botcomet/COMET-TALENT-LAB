@@ -438,3 +438,69 @@ def test_search_history_covers_the_whole_mission_so_no_query_is_replayed_across_
                 assert extra in hist, "les requêtes complémentaires comptent aussi"
         assert any((r.variant or {}).get("extra_queries") for r in rows), "précondition : la stricte INF a des requêtes complémentaires"
     assert len(gens) == 3
+
+
+def test_a_document_that_exhausts_its_time_budget_fails_explicitly_without_blocking_others(tm, monkeypatch):
+    s = tm(1)
+    mid = _setup_tlj(s)
+    from talentlab import config
+    monkeypatch.setenv("TALENTLAB_ANALYSIS_TIMEOUT_S", "0")
+    config.get_settings.cache_clear()
+    r = upload(s, mid, [("lent.txt", C.CV_TLJ_B.encode())])
+    d = r.json()["documents"][0] if isinstance(r.json(), dict) and "documents" in r.json() else r.json()[0]
+    docs = s.get(f"/api/missions/{mid}/documents").json()
+    doc = next(x for x in docs if x["filename"] == "lent.txt")
+    assert doc["status"] == "failed" and doc["error_code"] == "timeout" and "dépassé" in doc["error_message"]
+    monkeypatch.setenv("TALENTLAB_ANALYSIS_TIMEOUT_S", "60")
+    config.get_settings.cache_clear()
+    upload(s, mid, [("normal.txt", C.CV_TLJ_A.encode())])
+    docs = s.get(f"/api/missions/{mid}/documents").json()
+    assert next(x for x in docs if x["filename"] == "normal.txt")["status"] == "done"
+
+
+def test_eliminatory_needs_a_quote_that_exists_in_a_recorded_client_source(tm):
+    s = tm(1)
+    m = create_mission(s)
+    mid = m["id"]
+    rid = next(x["id"] for x in s.get(f"/api/missions/{mid}").json()["requirements"] if x["key"] == "skill:avro")
+    patch = lambda q: s.patch(f"/api/missions/{mid}/requirements/{rid}", json={"category": "eliminatoire_confirme", "source_kind": "client_precision_validee", "quote": q})
+    assert patch("x").status_code == 422, "citation trop courte"
+    r = patch("Le client exige absolument Avro et le Schema Registry")
+    assert r.status_code == 422 and "aucune source enregistrée" in r.text, "citation inventée : aucune source ne la contient"
+    assert s.post(f"/api/missions/{mid}/sources", json={"kind": "client_precision_validee", "author": "DSI client (fictif)", "source_date": "2026-09-30",
+                                                        "text": "Le client exige absolument Avro et le Schema Registry, c'est éliminatoire."}).status_code == 201
+    ok = patch("Le client exige absolument Avro et le Schema Registry")
+    assert ok.status_code == 200 and ok.json()["category"] == "eliminatoire_confirme"
+    # la citation retrouvée est insensible à la casse, aux accents et aux espaces multiples
+    rid2 = next(x["id"] for x in s.get(f"/api/missions/{mid}").json()["requirements"] if x["key"] == "skill:kafka_connect" and x["status"] == "active")
+    r2 = s.patch(f"/api/missions/{mid}/requirements/{rid2}", json={"category": "eliminatoire_confirme", "source_kind": "client_precision_validee", "quote": "LE CLIENT   EXIGE ABSOLUMENT avro"})
+    assert r2.status_code == 200
+
+
+def test_grid_parameters_are_bounded_and_ordered(tm):
+    s = tm(1)
+    mid = create_mission(s)["id"]
+    s.post(f"/api/missions/{mid}/requirements/validate", json={})
+    g = s.post(f"/api/missions/{mid}/grid/propose").json()
+    current = lambda: next(x for x in s.get(f"/api/missions/{mid}").json()["grids"] if x["id"] == g["id"])["thresholds"]
+    before = g["thresholds"]
+    for bad in ({"very_interesting": -5000}, {"very_interesting": 400}, {"interesting": 99, "very_interesting": 90}):
+        r = s.put(f"/api/missions/{mid}/grid/{g['id']}", json={"thresholds": bad})
+        assert r.status_code == 422, (bad, r.text)
+    assert s.put(f"/api/missions/{mid}/grid/{g['id']}", json={"recency_window_years": 0}).status_code == 422
+    assert s.put(f"/api/missions/{mid}/grid/{g['id']}", json={"recency_window_years": 500}).status_code == 422
+    assert current() == before, "un refus ne modifie rien"
+    assert s.put(f"/api/missions/{mid}/grid/{g['id']}", json={"thresholds": {"very_interesting": 97, "interesting": 82}}).status_code == 200
+
+
+def test_a_requirement_change_after_freeze_is_flagged_as_grid_drift_never_applied_silently(tm):
+    s = tm(1)
+    mid = create_mission(s)["id"]
+    freeze(s, mid)
+    m0 = s.get(f"/api/missions/{mid}").json()
+    assert m0["grid_drift"] is None
+    rid = next(x["id"] for x in m0["requirements"] if x["key"] == "skill:kafka" and x["status"] == "active")
+    assert s.patch(f"/api/missions/{mid}/requirements/{rid}", json={"category": "souhaitable"}).status_code == 200
+    m1 = s.get(f"/api/missions/{mid}").json()
+    assert m1["grid_drift"] and m1["grid_drift"]["from_version"] == 1 and any(c["key"] == "skill:kafka" for c in m1["grid_drift"]["changed"])
+    assert [g for g in m1["grids"] if g["status"] == "frozen"][-1]["content_hash"] == [g for g in m0["grids"] if g["status"] == "frozen"][-1]["content_hash"], "la grille figée n'a pas bougé"

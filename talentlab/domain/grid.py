@@ -245,7 +245,30 @@ def validate(grid: Grid, effective: list[Req], *, allow_unresolved_clarification
         warnings.append("Un critère pèse plus de 40 points : " + ", ".join(c.label for c in big))
     if not grid.scored():
         errors.append("La grille ne contient aucun critère noté.")
+    errors += parameter_errors(grid)
     return errors, warnings
+
+
+def parameter_errors(grid: "Grid") -> list[str]:
+    """Seuils, plafonds et facteurs de couverture : bornés et cohérents (un seuil négatif ou un facteur > 1 fausserait toute la comparaison)."""
+    errs: list[str] = []
+    th = grid.thresholds
+    for k, v in th.items():
+        if not isinstance(v, (int, float)) or not 0 <= v <= 100:
+            errs.append(f"Seuil « {k} » = {v} : doit être compris entre 0 et 100.")
+    if not errs and not (th.get("low_fit", 0) <= th.get("interesting", 80) <= th.get("very_interesting", 96)):
+        errs.append("Les seuils doivent être ordonnés : adéquation faible ≤ intéressant ≤ très intéressant.")
+    for k, v in grid.caps.items():
+        if v is not None and (not isinstance(v, (int, float)) or not 0 <= v <= 100):
+            errs.append(f"Plafond « {k} » = {v} : doit être compris entre 0 et 100 (ou absent).")
+    f = grid.factors
+    if f:
+        vals = [f.get("confirme_demontre"), f.get("partiellement_demontre"), f.get("declare_sans_preuve")]
+        if any(not isinstance(x, (int, float)) or not 0 <= x <= 1 for x in vals) or not (vals[0] >= vals[1] >= vals[2]):
+            errs.append("Facteurs de couverture : entre 0 et 1 et décroissants (confirmé ≥ partiel ≥ déclaré).")
+        if f.get("non_documente", 0) != 0 or f.get("contredit", 0) != 0:
+            errs.append("Un critère non documenté ou contredit ne rapporte aucun point (facteur 0).")
+    return errs
 
 
 def freeze(grid: Grid, effective: list[Req], validated_by: str, *, allow_unresolved_clarifications: bool = False) -> Grid:

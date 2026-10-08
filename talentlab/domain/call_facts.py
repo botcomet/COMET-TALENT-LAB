@@ -19,7 +19,7 @@ from . import clauses as cl
 from . import lexicon as lx
 from .enums import EvidenceKind, EvidenceSource, Level, Reliability
 from .evidence import analyze_window, classify
-from .text import fold, sentences
+from .text import fold, fold_compact, sentences
 
 NOTE_KINDS = ("candidate_call_note", "transcript", "client_brief_note", "interview_report", "client_feedback", "complementary_doc")
 
@@ -201,7 +201,7 @@ def extract_facts(text: str, kind: str = "transcript", *, speaker_map: dict[str,
         base_off = u.start
         for s in sentences(u.text, 0):
             sent = s.text
-            f = fold(sent)
+            f = fold_compact(sent)
             st, en = base_off + s.start, base_off + s.end
             if sent.strip().endswith("?"):
                 continue

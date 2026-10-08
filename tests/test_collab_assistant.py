@@ -397,3 +397,72 @@ def test_null_provider_is_explicit():
     from talentlab.llm.provider import LLMUnavailable
     with pytest.raises(LLMUnavailable):
         NullProvider().complete_json("s", "u")
+
+
+@pytest.mark.sqlite_only
+def test_simultaneous_confirmations_of_one_proposal_apply_it_exactly_once(tm, app):
+    """Course critique : « une proposition ne s'applique qu'une fois » doit tenir sous requêtes simultanées (réservation atomique)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from fastapi.testclient import TestClient
+    s = tm(1)
+    mid = setup_tlj(s)
+    p = s.post(f"/api/missions/{mid}/assistant", json={"message": "Le client vient de préciser que Kafka Connect est impératif"}).json()["proposals"][0]
+    n_before = len([x for x in reqs(s, mid) if x["key"] == "skill:kafka_connect"])
+    cookie = s.c.cookies.get("talentlab_session")
+
+    def go(_):
+        with TestClient(app, headers={"X-Requested-With": "talentlab"}, cookies={"talentlab_session": cookie}) as c:
+            return c.post(f"/api/missions/{mid}/proposals/{p['id']}/confirm").status_code
+
+    with ThreadPoolExecutor(8) as ex:
+        codes = list(ex.map(go, range(8)))
+    assert codes.count(200) == 1, codes
+    assert all(c in (200, 409, 503) for c in codes), codes
+    n_after = len([x for x in reqs(s, mid) if x["key"] == "skill:kafka_connect"])
+    assert n_after - n_before <= 1, "la proposition ne crée qu'une exigence"
+
+
+# ================================================================ revue de sécurité : gouvernance de la bibliothèque, visibilité des cas, effacement complet
+def test_only_the_author_or_a_lead_can_retire_or_generalise_a_shared_library_entry(tm, app):
+    a, b = tm(1), tm(2)
+    e = a.post("/api/library", json={"kind": "note_metier", "title": "Retour sur Kafka Connect", "body": "Demander le nombre de connecteurs et la gestion des erreurs.", "role_family": "", "tags": []}).json()
+    assert a.post(f"/api/library/{e['id']}/publish", json={}).status_code == 200
+    assert b.post(f"/api/library/{e['id']}/retire").status_code == 403, "un autre TM ne dépublie pas l'entrée d'autrui"
+    assert b.post(f"/api/library/{e['id']}/publish", json={"generalize": True}).status_code == 403, "ni ne la généralise"
+    pilote = Session(app, "pilote.demo@example.invalid")
+    assert pilote.post(f"/api/library/{e['id']}/publish", json={"generalize": True}).status_code == 200
+    assert pilote.post(f"/api/library/{e['id']}/retire").status_code == 200
+    pilote.close()
+
+
+def test_an_admin_without_access_to_the_mission_never_sees_cv_excerpts_in_regression_cases(tm, app):
+    s = tm(1)
+    mid = setup_tlj(s)
+    _correct_spring(s, mid, C.CV_TLJ_B)
+    admin = Session(app, "admin.demo@example.invalid")
+    other = tm(2)
+    owner_view = s.get("/api/library/regression-cases").json()[0]["case"]
+    admin_view = admin.get("/api/library/regression-cases").json()
+    assert owner_view["evidence_excerpts"] and not owner_view.get("redacted_for_viewer")
+    assert admin_view and admin_view[0]["case"]["evidence_excerpts"] == [] and admin_view[0]["case"]["redacted_for_viewer"] is True
+    assert admin_view[0]["error_nature"] == "mention_surevaluee", "le cas pédagogique reste visible"
+    assert other.get("/api/library/regression-cases").json() == [], "un TM sans accès ne voit rien"
+    admin.close()
+
+
+def test_deleting_a_candidate_erases_its_documents_text_and_file(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("b.txt", C.CV_TLJ_B.encode())])
+    c = s.get(f"/api/missions/{mid}/candidates").json()[0]
+    from talentlab.db import session_scope
+    from talentlab.models import Document
+    with session_scope() as db:
+        assert db.query(Document).filter(Document.candidate_id == c["id"]).count() == 1
+    assert s.delete(f"/api/missions/{mid}/candidates/{c['id']}").status_code == 204
+    with session_scope() as db:
+        assert db.query(Document).count() == 0, "aucun document (fichier ni texte chiffrés) ne survit à l'effacement du candidat"
+    assert s.get(f"/api/missions/{mid}/documents").json() == []
+    r = upload(s, mid, [("b.txt", C.CV_TLJ_B.encode())])
+    docs = s.get(f"/api/missions/{mid}/documents").json()
+    assert docs[0]["status"] == "done", "le même CV peut être ré-importé : plus de faux « doublon » d'un candidat effacé"

@@ -57,17 +57,20 @@ def wrap_untrusted(text: str, label: str = "DOCUMENT") -> str:
 
 # ----------------------------------------------------------------- coordonnées directes (RGPD : minimisation)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_PHONE = re.compile(r"(?<!\d)(?:\+?\d{1,3}[\s.-]?)?(?:\(?0?\d\)?[\s.-]?){4,6}\d{2}(?!\d)")
-_URL = re.compile(r"(?:https?://|www\.)\S+|linkedin\.com/\S+", re.I)
+_EMAIL_OBFUSCATED = re.compile(r"\b[\w.+-]+\s*[\[(]\s*(?:at|arobase)\s*[\])]\s*[\w-]+(?:\s*[\[(]\s*(?:dot|point)\s*[\])]\s*[\w-]+)+", re.I)
+# numéros : international (+33 6 12 34 56 78, (+33)6…, 0033…, +44 7911 123456) et national (06 12 34 56 78, 06.12.34.56.78, 0612345678)
+_PHONE = re.compile(r"(?<![\w/])(?:(?:\+|00)\s?\d{1,3}\s?(?:\(\d\))?|\(\+?\d{1,3}\)|0)(?:[\s.\-]?\d){8,11}(?![\w])")
+_URL = re.compile(r"(?:https?://|www\.)\S+|\b(?:linkedin|github|gitlab|bitbucket|twitter|facebook|instagram|medium|behance|dribbble|stackoverflow)\.\w+/\S*", re.I)
 
 
 def has_contact_details(text: str) -> bool:
     """Vrai si le texte contient un email, un numéro de téléphone ou un lien (donnée directement identifiante)."""
-    return bool(_URL.search(text) or _EMAIL.search(text) or any(len(re.sub(r"\D", "", m.group(0))) >= 9 for m in _PHONE.finditer(text)))
+    return bool(_URL.search(text) or _EMAIL.search(text) or _EMAIL_OBFUSCATED.search(text) or _PHONE.search(text))
 
 
 def scrub(text: str) -> str:
     """Retire les coordonnées directes. Ne prétend pas anonymiser : un nom, un employeur ou une adresse peuvent subsister."""
     t = _URL.sub("[lien retiré]", text)
     t = _EMAIL.sub("[email retiré]", t)
-    return _PHONE.sub(lambda m: "[numéro retiré]" if len(re.sub(r"\D", "", m.group(0))) >= 9 else m.group(0), t)
+    t = _EMAIL_OBFUSCATED.sub("[email retiré]", t)
+    return _PHONE.sub("[numéro retiré]", t)

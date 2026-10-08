@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -18,7 +19,7 @@ from ..domain import qualification as qa
 from ..domain.call_facts import candidate_facts_from, extract_facts, reliability_for, source_for
 from ..domain.cv_extract import ExtractionError, extract_text, parse_cv
 from ..domain.enums import EvidenceKind, EvidenceSource, Level, Reliability
-from ..domain.evidence import ExtEvidence
+from ..domain.evidence import AnalysisTimeout, ExtEvidence
 from ..domain.safety import scan_text
 from ..domain.scoring import CandidateFacts, assess, compare as compare_assessments, diff_assessments
 from ..domain.text import fold
@@ -140,18 +141,24 @@ def process_document(doc_id: str, user_id: str) -> None:
             _stage(db, d, "processing", 70, "évaluation sur la grille figée")
             grid = ms.latest_frozen(db, m.id)
             if grid is not None:
-                assess_candidate(db, user_id, m, cand, grid, "import", "Analyse initiale du CV", doc=d)
+                assess_candidate(db, user_id, m, cand, grid, "import", "Analyse initiale du CV", doc=d, deadline=time.monotonic() + s.analysis_timeout_s)
                 d.stage = "analysé"
             else:
                 d.stage = "extrait — évaluation en attente de la grille figée"
             d.status, d.progress = "done", 100
             audit.log(db, user_id, "cv.processed", "document", d.id, m.id, candidate=cand.id, quality=ex.quality, flags=len(d.security_flags))
-    except Exception:                                           # noqa: BLE001
+    except Exception as exc:                                    # noqa: BLE001
+        timed_out = isinstance(exc, AnalysisTimeout)
         try:
             with session_scope() as db:
                 d = db.get(Document, doc_id)
                 if d and d.status != "done":
-                    d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec du traitement", "internal", "Erreur interne lors du traitement."
+                    if timed_out:
+                        d.status, d.progress, d.stage, d.error_code = "failed", 100, "analyse interrompue (temps maximal dépassé)", "timeout"
+                        d.error_message = (f"L'analyse a dépassé {s.analysis_timeout_s} s : document anormal (contenu répétitif ou démesuré). "
+                                           "Aucun score n'est calculé ; importer une version normale du CV.")
+                    else:
+                        d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec du traitement", "internal", "Erreur interne lors du traitement."
         except Exception:                                       # noqa: BLE001
             pass
 
@@ -193,14 +200,14 @@ def latest_assessment(db: Session, candidate_id: str, grid_id: str | None = None
 
 
 def assess_candidate(db: Session, user_id: str, m: Mission, cand: Candidate, grid_row: Grid, trigger: str, reason: str = "",
-                     doc: Document | None = None) -> Assessment:
+                     doc: Document | None = None, deadline: float | None = None) -> Assessment:
     doc = doc or db.scalar(select(Document).where(Document.candidate_id == cand.id, Document.status == "done").order_by(Document.created_at.desc()).limit(1))
     if doc is None or doc.text is None:
         raise HTTPException(409, "Aucun document exploitable pour ce candidat : aucune évaluation n'est produite.")
     grid = ms.grid_from_row(grid_row)
     parsed = parse_cv(doc.text, today=date.today(), extraction_quality=doc.extraction_quality or "ok")
     ext, facts = load_external(db, cand.id)
-    asm = assess(grid, parsed, ext, facts, today=date.today(), security_flags=doc.security_flags)
+    asm = assess(grid, parsed, ext, facts, today=date.today(), security_flags=doc.security_flags, deadline=deadline)
     res = asm.to_dict()
     prev = latest_assessment(db, cand.id)
     diff = diff_assessments(prev.result, res) if prev else None
@@ -420,8 +427,13 @@ def redact_corrections(db: Session, candidate_ids: list[str]) -> int:
 
 
 def delete_candidate(db: Session, user: User, m: Mission, cand: Candidate) -> None:
-    audit.log(db, user.id, "candidate.delete", "candidate", cand.id, m.id, ref=cand.ref)
+    """Effacement complet : le candidat, ses évaluations, preuves et notes (cascade), ET ses documents (fichier et texte chiffrés) ;
+    les extraits de CV des cas de non-régression sont effacés ; l'audit ne garde que des identifiants."""
+    docs = list(db.scalars(select(Document).where(Document.candidate_id == cand.id)))
+    audit.log(db, user.id, "candidate.delete", "candidate", cand.id, m.id, ref=cand.ref, documents=len(docs))
     redact_corrections(db, [cand.id])
+    for d in docs:
+        db.delete(d)
     db.delete(cand)
 
 

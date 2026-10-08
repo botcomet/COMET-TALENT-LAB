@@ -379,3 +379,59 @@ def test_real_work_in_common_formulations_is_credited(grids, brief, key, bullet,
     cv = ("Consultant\n\nEXPÉRIENCES\n\nCabinet — Consultant SAP GTS (Janvier 2022 – en cours)\n" if brief == "GTS" else HDR) + bullet
     got = crit(score(grids[brief], cv), key).level
     assert ORDER[got] >= ORDER[minlvl], f"sous-crédit : {bullet[:60]} → {got}"
+
+
+# ================================================================ DoS : espaces Unicode, budget de temps, récursion
+@pytest.mark.parametrize("name,fn", [
+    ("brief tjm + U+2003", lambda: __import__("talentlab.domain.brief", fromlist=["x"]).analyze_brief("Tech Lead Java", "tjm" + " " * 480 + "x")),
+    ("langues + U+2003", lambda: parse_cv("Dev\nanglais" + " " * 20_000 + "x", today=TODAY)),
+    ("note tjm + espaces", lambda: __import__("talentlab.domain.call_facts", fromlist=["x"]).extract_facts("tjm" + " " * 40_000 + "x", "candidate_call_note")),
+    ("note tjm + U+2003", lambda: __import__("talentlab.domain.call_facts", fromlist=["x"]).extract_facts("tjm" + " " * 40_000 + "x", "candidate_call_note")),
+])
+def test_long_runs_of_unicode_whitespace_never_cause_quadratic_time(name, fn):
+    import time
+    t0 = time.perf_counter()
+    fn()
+    assert time.perf_counter() - t0 < 3, name
+
+
+def test_deeply_nested_parentheses_are_a_validation_error_not_a_crash():
+    from talentlab.domain import boolean as bl
+    issues = bl.validate("(" * 20_000 + "a" + ")" * 20_000)
+    assert any(i.code == "TOO_DEEP" and i.severity == "error" for i in issues)
+
+
+def test_assessment_stops_with_a_timeout_when_its_budget_is_exhausted(grids):
+    import time
+    from talentlab.domain.evidence import AnalysisTimeout
+    from talentlab.domain.scoring import assess
+    with pytest.raises(AnalysisTimeout):
+        assess(grids["TLJ"], parse_cv(C.CV_TLJ_B, today=TODAY), today=TODAY, deadline=time.monotonic() - 1)
+
+
+def test_fold_turns_every_unicode_space_into_a_plain_space_without_changing_length():
+    from talentlab.domain.text import fold, fold_compact
+    t = "a b c d\te　f"
+    assert fold(t) == "a b c d e f" and len(fold(t)) == len(t) and fold_compact("a" + " " * 50 + "b") == "a b"
+
+
+# ================================================================ export : nettoyage des coordonnées (revue de sécurité)
+@pytest.mark.parametrize("raw", [
+    "Contact: camille.fictif@example.invalid", "Mail : camille [at] example [dot] invalid", "Tel +33 6 12 34 56 78", "Tel 06.12.34.56.78", "Tel 0612345678",
+    "Tel (+33)6 12 34 56 78", "Tel +44 7911 123456", "Tel 0033 6 12 34 56 78", "Tel +33 (0)6 12 34 56 78", "linkedin: linkedin.com/in/camille-fictif", "github.com/camillefictif",
+])
+def test_scrub_removes_direct_contact_details_in_common_formats(raw):
+    from talentlab.domain.safety import has_contact_details, scrub
+    out = scrub(raw)
+    assert "[" in out and has_contact_details(raw)
+    assert not any(ch.isdigit() for ch in out.replace("33", "").replace("44", "")) or "retiré" in out
+    assert "camille" not in out.lower().replace("camille fictif", "") or "retiré" in out
+
+
+@pytest.mark.parametrize("ok", [
+    "Débit de 40 000 messages par seconde sur 6 brokers", "Entre 2019 et 2023, puis 2024-2026", "Volume de 100 000 000 messages par jour", "Budget 650 € / jour",
+    "Kafka 3.4.1 et Java 17.0.2 en 2022", "Du 2019-03-12 au 2020-03-12", "ISO 27001:2022 et RFC 7231",
+])
+def test_scrub_leaves_technical_figures_and_dates_alone(ok):
+    from talentlab.domain.safety import has_contact_details, scrub
+    assert scrub(ok) == ok and not has_contact_details(ok)

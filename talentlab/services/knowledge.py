@@ -59,6 +59,8 @@ def publish(db: Session, user: User, e: KnowledgeEntry, *, generalize: bool = Fa
     """Un Talent Manager valide avant publication. La généralisation (retirer « spécifique client ») est un acte explicite et séparé."""
     if e.author_id == user.id and e.kind == "enseignement_retour_client" and generalize:
         pass          # l'auteur peut généraliser son propre enseignement ; la traçabilité est assurée par l'audit
+    if generalize and not _can_govern(user, e):
+        raise HTTPException(403, "Seul l'auteur, un pilote ou un administrateur peut généraliser un enseignement (retirer « spécifique client »).")
     e.status, e.validated_by = "published", user.id
     if generalize:
         e.client_specific = False
@@ -66,7 +68,13 @@ def publish(db: Session, user: User, e: KnowledgeEntry, *, generalize: bool = Fa
     return e
 
 
+def _can_govern(user: User, e: KnowledgeEntry) -> bool:
+    return e.author_id == user.id or user.role in ("admin", "pilote")
+
+
 def retire(db: Session, user: User, e: KnowledgeEntry) -> KnowledgeEntry:
+    if not _can_govern(user, e):
+        raise HTTPException(403, "Seul l'auteur, un pilote ou un administrateur peut retirer une entrée de la bibliothèque collective.")
     e.status = "retired"
     audit.log(db, user.id, "knowledge.retire", "knowledge", e.id, "")
     return e
@@ -106,13 +114,25 @@ def suggest_for_mission(db: Session, m: Mission, reqs_keys: list[str]) -> list[d
 
 
 def regression_cases(db: Session, user: User) -> list[dict[str, Any]]:
-    """Cas de test issus des corrections de scoring (§17.3). Lecture seule : aucune règle n'est modifiée automatiquement."""
+    """Cas de test issus des corrections de scoring (§17.3). Lecture seule : aucune règle n'est modifiée automatiquement.
+    Les extraits de CV ne sont montrés qu'à qui a un droit de lecture sur la MISSION ; un administrateur sans accès voit le cas pédagogique
+    (critère, niveaux, nature de l'erreur) mais jamais les extraits."""
     from ..models import Mission as M
+    from ..security import access_level
     out = []
     for c in db.scalars(select(ScoringCorrection).order_by(ScoringCorrection.created_at.desc())):
         mm = db.get(M, c.mission_id)
-        if mm and mm.owner_id != user.id and user.role != "admin":
+        if mm is None:
             continue
+        level = access_level(db, user, mm)
+        can_read = level in ("owner", "edition", "lecture")
+        if not can_read and user.role != "admin":
+            continue
+        case = dict(c.regression_case or {})
+        if not can_read:
+            case["evidence_excerpts"] = []
+            case["justification_observed"] = "[masqué : pas de droit de lecture sur la mission]"
+            case["redacted_for_viewer"] = True
         out.append({"id": c.id, "criterion": c.criterion_key, "error_nature": c.error_nature, "old_level": c.old_level, "new_level": c.new_level,
-                    "case": c.regression_case, "created_at": c.created_at.isoformat()})
+                    "case": case, "created_at": c.created_at.isoformat()})
     return out

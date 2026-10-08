@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from .text import fold, normalize_text
+from .text import fold, fold_compact, normalize_text
 
 MAX_BYTES_DEFAULT = 10 * 1024 * 1024
 MAX_PAGES_DEFAULT = 40
@@ -330,7 +330,7 @@ _LEVELS = {"courant": "courant", "fluent": "courant", "bilingue": "bilingue", "b
 
 
 def _languages(text: str) -> dict[str, str]:
-    f = fold(text)
+    f = fold_compact(text)
     out: dict[str, str] = {}
     for lang, rx in (("anglais", r"(?:anglais|english)"), ("allemand", r"(?:allemand|german|deutsch)"), ("espagnol", r"(?:espagnol|spanish)"),
                      ("francais", r"(?:francais|french)")):
@@ -386,6 +386,8 @@ def parse_cv(text: str, *, today: date | None = None, extraction_quality: str = 
             continue
         if any(s0 <= a < s1 for s0, s1 in skip):
             continue
+        if len(raw) > 160:
+            continue                              # un en-tête d'expérience tient sur une ligne courte ; pas de recherche de dates sur un pavé
         f = fold(raw)
         m = next((mm for mm in _RANGE.finditer(f) if plausible_range(mm.group("s"), mm.group("e"), f[mm.end():mm.end() + 24], today)), None)
         if m is None and _RANGE.search(f) and len(raw) <= 160:

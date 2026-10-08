@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     max_pages: int = 40
     min_chars: int = 250
     max_chars: int = 150_000
+    analysis_timeout_s: int = 60                       # budget de temps par document (contenu anormal → échec explicite, jamais un blocage)
     processing_mode: str = "background"                # background | inline (tests)
     worker_threads: int = 4
 

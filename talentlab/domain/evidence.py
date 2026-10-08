@@ -9,6 +9,7 @@ jamais un signal (test 13).
 from __future__ import annotations
 
 import re
+import time
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date
@@ -114,8 +115,13 @@ class CritEvidence:
     experience_idxs: list[int] = field(default_factory=list)
 
 
+class AnalysisTimeout(Exception):
+    """L'analyse d'un document a dépassé son budget de temps (contenu anormal : répétitif, démesuré…)."""
+
+
 @dataclass
 class EvalConfig:
+    deadline: float | None = None          # échéance monotone (time.monotonic) ; vérifiée entre les critères et toutes les 16 mentions
     today: date = field(default_factory=date.today)
     recency_window_years: int = 7
     advanced_min_terms: int = 2
@@ -447,6 +453,8 @@ def evaluate_text_criterion(parsed: ParsedCV, key: str, label: str, terms: list[
         if processed >= MAX_MENTIONS_ANALYSED:
             truncated = True
             break
+        if cfg.deadline is not None and processed % 16 == 0 and time.monotonic() > cfg.deadline:
+            raise AnalysisTimeout()
         # réalisation : l'élément (puce / paragraphe) est l'unité ; fenêtre = phrase de la mention ± 1 dans cet élément
         bkey = (exp.body_span[0], exp.span[1]) if exp else (0, len(text))
         if bkey not in blocks_cache:
