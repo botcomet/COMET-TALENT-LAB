@@ -18,7 +18,7 @@ FastAPI  talentlab/api/routes.py ── schémas pydantic stricts (extra=forbid)
 services/   missions · searches · matching · export · knowledge · assistant      (orchestration, droits, audit, transactions)
    │
 domain/     brief · requirements · grid · boolean · search_plan · search_optimizer
-            cv_extract · evidence · scoring · qualification · call_facts · claims · safety · coach · lexicon
+            cv_extract · evidence · clauses · scoring · qualification · call_facts · claims · safety · coach · lexicon
    │
 SQLAlchemy 2  models.py (19 tables)  ──  SQLite (dev/tests) | PostgreSQL 16 (vérifié)
                 chiffrement applicatif Fernet sur les champs sensibles (EncText / EncJSON / EncBytes)
@@ -59,9 +59,9 @@ La limite de 250 caractères et la syntaxe sont des **paramètres de profil de p
 1. **Import** (`ingest_files`) : lot ≤ 20, taille/pages/min. de caractères configurables, détection de doublons par empreinte, noms de fichiers assainis.
 2. **Extraction** (`cv_extract.extract_text`) : PDF, DOCX, TXT ; échecs *explicites et distincts* : fichier vide, trop gros, type non pris en charge, corrompu, chiffré, sans couche texte (scan), texte illisible, contenu insuffisant, trop de pages. Pas d'OCR dans cette version.
 3. **Structuration** (`parse_cv`) : expériences avec dates, environnement technique, corps ; incohérences de dates signalées sans être corrigées.
-4. **Preuves** (`evidence.evaluate_text_criterion`) : pour chaque critère de la grille, repérage des mentions, **lieu** (liste de compétences, ligne d'environnement, en-tête, corps d'expérience) et **signaux** (verbes d'action, rôle, profondeur, volumes chiffrés, résultats, livrables, contexte non professionnel). Règles : mention seule = « déclaré » ; commodité = pratique répétée exigée ; profondeur « avancée » = au moins deux indicateurs avancés ; volumétrie comparée par portée (débit par jour, jamais confondue d'un système à un autre) ; fenêtre de récence (7 ans par défaut, plus courte pour les technologies volatiles).
+4. **Preuves** (`evidence.evaluate_text_criterion`) : pour chaque critère de la grille, repérage des mentions, **lieu** (liste de compétences, ligne d'environnement, en-tête, corps d'expérience), **portée** (`clauses.py` : la proposition qui porte la mention la nie-t-elle, l'annonce-t-elle, l'attribue-t-elle à un tiers, la place-t-elle dans une formation, un projet personnel, un contexte administratif ?) et **signaux** (verbes d'action de SA proposition, rôle, profondeur dédoublonnée, volumes chiffrés avec durée, résultats, livrables). Règles : mention seule = « déclaré » ; une proposition niée n'est jamais un crédit ; futur, tiers, formation, personnel, administratif plafonnent à « déclaré » ; une liste de technologies sous une étiquette n'est pas une réalisation ; commodité = pratique répétée exigée ; profondeur « avancée » = au moins deux indicateurs avancés ; volumétrie comparée par portée (débit par jour, jamais confondue d'un système à un autre) ; fenêtre de récence (7 ans par défaut, plus courte pour les technologies volatiles) **ancrée sur la pratique** (une mention récente dans un environnement technique ne rafraîchit pas une pratique ancienne) ; version exigée (« Java 17 ») comparée aux versions citées.
 5. **Scoring** (`scoring.assess`) : points = poids × facteur (confirmé 1,0 · partiel 0,5 · déclaré 0,15 · non documenté 0 · contredit 0). Plafonds **uniquement sur absence explicite** (impératif contredit 60 ; éliminatoire contredit 35). « Potentiel » = borne haute comptant les critères déclarés/partiels, jamais une compétence acquise. Les contraintes (TJM, présence, astreinte, fuseau, langue, disponibilité) sont évaluées à part ; *inconnu ≠ incompatible*. La qualité d'information est une mesure distincte de l'adéquation ; la qualité de rédaction n'entre dans aucun score.
-6. **Paliers** : très intéressant (≥ 96, aucun impératif ouvert), intéressant (≥ 80), à qualifier, écart majeur, adéquation faible, non évaluable. Seuils configurables.
+6. **Classement** : impératifs contredits, puis impératifs ouverts, puis score documenté (les impératifs ne se compensent pas). **Paliers** : très intéressant (≥ 96, aucun impératif ouvert), intéressant (≥ 80), à qualifier, écart majeur, adéquation faible, non évaluable. Seuils configurables.
 
 ### 4.4 Qualification et réévaluation
 - `qualification.generate` : questions par critère non confirmé, personnalisées par l'extrait du CV, avec signaux d'approfondissement ; `is_generic` interdit les questions génériques (testé sur chaque modèle).
@@ -71,6 +71,9 @@ La limite de 250 caractères et la syntaxe sont des **paramètres de profil de p
 
 ### 4.5 Apprentissage
 Un retour client propose un enseignement **spécifique au client** ; il ne devient universel qu'après validation humaine. Une correction du recruteur abaisse/relève un niveau, enregistre la nature de l'erreur (faux positif, faux négatif, mauvaise portée…) et devient un cas de non-régression ; aucune règle globale n'est modifiée automatiquement.
+
+### 4.6 Garde-fous de performance et de robustesse
+Texte extrait limité (`max_chars`, 150 000) ; toute espace Unicode est repliée en espace simple (`text.fold`, longueur conservée) et les motifs de champs travaillent sur du texte compacté ; motifs ancrés et mis en cache ; au plus 300 mentions analysées par critère ; **budget de temps par document** (`analysis_timeout_s`, 60 s) : au-delà, échec explicite « timeout » sans score, sans bloquer les autres CV ; profondeur de parenthèses booléennes bornée.
 
 ## 5. Traitement asynchrone
 Les lots de CV sont traités par un pool de threads du processus (`worker_threads`), en mode `inline` pour les tests. Au démarrage, `requeue_stale` relance les documents restés « en cours » après un arrêt. **Limite connue :** ce n'est pas une file durable multi-instance ; pour un déploiement multi-instances il faut une vraie file de tâches (voir INTEGRATION.md).

@@ -49,8 +49,11 @@ _RESULT = re.compile(r"\b(?:reduction|reduit|diminu\w*|gain|ameliorat\w*|amelior
                      r"reduced|improved|increased|saved)\b|\b\d+(?:[.,]\d+)?\s*%|99[.,]\d")
 _DELIVERABLE = re.compile(r"\b(?:dossier\s+d'?architecture|documentation|documents?|plan\s+de|runbook|cartographie|rapports?|specifications?|cahier|"
                           r"procedures?|guides?|plan\s+d'action|livrables?|referentiels?|catalogue|kpi|tableaux?\s+de\s+bord|regles?|pv\s+de)\b")
-_WORKISH = re.compile(r"\b(?:develop\w*|conc\w*|maintenance|maintien|evolutions?|corrections?|realis\w*|integr\w*|implement\w*|mise\s+en\s+place|mis\s+en\s+place|"
-                      r"administr\w*|exploit\w*|deploy\w*|configur\w*|migr\w*|test\w*|support|built|developed|designed|implemented|maintained)\b")
+# travail d'INGÉNIERIE décrit (règle de pratique courante) : ni « test », ni « support » (un testeur dont Java figure dans l'environnement ne développe pas en Java),
+# ni « équipes de développement » (nom d'équipe, pas un geste)
+_WORKISH = re.compile(r"(?<!equipes de )(?<!equipe de )(?<!service de )(?<!pole )(?<!departement de )\b(?:develop\w*|conc\w*|maintenance|maintien|evolutions?|corrections?|realis\w*|integr\w*|implement\w*|mise\s+en\s+place|mis\s+en\s+place|"
+                      r"administr\w*|exploit\w*|deploy\w*|configur\w*|migr\w*|built|developed|designed|implemented|maintained)\b")
+_TEST_PHRASE = re.compile(r"\btests?\s+d(?:e\s+|')\w+")        # « tests d'intégration » : du test, pas de l'intégration
 _CLAUSE_BREAK = re.compile(r";|\bet\b|\bpuis\b|\bainsi\s+que\b|\band\b")
 _VERSION = re.compile(r"\b[a-z][\w.+#-]*\s*v?\d+(?:\.\d+){0,2}\b")
 
@@ -516,7 +519,7 @@ def evaluate_text_criterion(parsed: ParsedCV, key: str, label: str, terms: list[
         support: set[int] = set()
         for e in parsed.experiences:
             mentioned = any(i.experience_idx == e.idx for i in items) or bool(e.title and lx.mentions(sk, e.title))
-            if mentioned and e.months and _WORKISH.search(fold(text[e.body_span[0]:e.body_span[1]])):
+            if mentioned and e.months and _WORKISH.search(_TEST_PHRASE.sub(" ", fold(text[e.body_span[0]:e.body_span[1]]))):
                 support.add(e.idx)
         if len(support) >= 2 and LEVEL_ORDER[level] < LEVEL_ORDER[Level.CONFIRMED]:
             level = Level.CONFIRMED

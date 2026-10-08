@@ -435,3 +435,11 @@ def test_scrub_removes_direct_contact_details_in_common_formats(raw):
 def test_scrub_leaves_technical_figures_and_dates_alone(ok):
     from talentlab.domain.safety import has_contact_details, scrub
     assert scrub(ok) == ok and not has_contact_details(ok)
+
+
+# ================================================================ E3 : la pratique « courante » ne se déduit pas d'un environnement technique de testeur
+def test_a_test_analyst_who_lists_java_in_the_environment_is_not_a_java_developer(grids):
+    cv = ("Testeur Fictif\nAnalyste de test\n\nEXPÉRIENCES\n\n"
+          "Banque Exemple — Analyste de test (Mars 2018 – en cours)\n- Rédaction et exécution de plans de test, recette fonctionnelle, tests de non-régression, suivi des anomalies.\nEnvironnement technique : Java, Selenium, Jira\n\n"
+          "Assurance Exemple — Analyste de test (Janvier 2012 – Février 2018)\n- Tests d'intégration et recette, support aux équipes de développement.\nEnvironnement technique : Java, JUnit, Jenkins\n")
+    assert crit(score(grids["TLJ"], cv), "java").level == DE
