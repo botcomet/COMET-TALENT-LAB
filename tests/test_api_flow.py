@@ -407,8 +407,7 @@ def _db_bytes(app_env) -> bytes:
     return out
 
 
-@sqlite_only
-def test_candidate_data_is_encrypted_at_rest_and_audit_has_no_cv_content(tm, app_env):
+def _inject_markers(tm):
     """Chaque champ texte lié à un candidat ou à un contact client est chiffré : un marqueur unique injecté par l'API n'apparaît JAMAIS en clair dans la base."""
     s = tm(1)
     mid = _setup_tlj(s)
@@ -428,6 +427,34 @@ def test_candidate_data_is_encrypted_at_rest_and_audit_has_no_cv_content(tm, app
     sid = s.post(f"/api/missions/{mid}/searches/generate").json()[0]["id"]
     s.post(f"/api/missions/{mid}/searches/{sid}/feedback", json={"result_count": 12, "notes": f"note {M['fbnotes']}"})
     s.post(f"/api/missions/{mid}/searches/{sid}/save", json={"status": "saved", "note": f"sauvé {M['savenote']}"})
+    return M
+
+
+def _all_rows_text() -> str:
+    """Toutes les lignes de toutes les tables, lues par SQLAlchemy (valeurs brutes : les colonnes chiffrées apparaissent sous forme d'octets chiffrés)."""
+    from sqlalchemy import text
+    from talentlab.db import Base, session_scope
+    out = []
+    with session_scope() as db:
+        for t in Base.metadata.sorted_tables:
+            for row in db.execute(text(f'select * from "{t.name}"')).fetchall():
+                out.append(repr(tuple(row)))
+    return "\n".join(out)
+
+
+def test_no_marker_appears_in_clear_in_any_row_of_any_table_on_any_backend(tm):
+    """Indépendant du moteur (SQLite ou PostgreSQL) : aucune ligne ne contient en clair un marqueur injecté dans un champ texte candidat/client."""
+    M = _inject_markers(tm)
+    dump = _all_rows_text()
+    for k, token in M.items():
+        assert token not in dump, f"donnée ({k}) en clair dans une ligne de la base : {token}"
+    assert "Banque Exemple" not in dump and "producteur Kafka" not in dump and "Ignore all previous" not in dump
+
+
+@sqlite_only
+def test_candidate_data_is_encrypted_at_rest_and_audit_has_no_cv_content(tm, app_env):
+    """Fichier SQLite BRUT (principal + WAL) : mêmes marqueurs, lus octet par octet."""
+    M = _inject_markers(tm)
     raw = _db_bytes(app_env)
     for k, token in M.items():
         assert token.encode() not in raw, f"donnée ({k}) en clair dans la base : {token}"

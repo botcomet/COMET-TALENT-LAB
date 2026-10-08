@@ -26,7 +26,7 @@ TALENTLAB_ENCRYPTION_KEY=…        # clé Fernet ; sa perte rend les données c
 TALENTLAB_DATABASE_URL=postgresql+psycopg://…
 ```
 
-Règles appliquées : un en-tête d'identité n'est jamais cru seul — le secret est comparé en temps constant ; l'utilisateur doit exister et être actif (`POST /api/admin/users` pour le provisionner) ; la production refuse de démarrer si une de ces conditions manque (`Settings._guard`). L'application doit être **inaccessible hors de la passerelle** (réseau privé / liste d'accès) : sinon le secret partagé est la seule protection.
+Règles appliquées : **un en-tête d'identité ou de secret présent plusieurs fois est refusé (401)** — la passerelle doit néanmoins supprimer tout en-tête d'identité fourni par le client avant d'ajouter le sien ; un en-tête d'identité n'est jamais cru seul — le secret est comparé en temps constant ; l'utilisateur doit exister et être actif (`POST /api/admin/users` pour le provisionner) ; la production refuse de démarrer si une de ces conditions manque (`Settings._guard`). L'application doit être **inaccessible hors de la passerelle** (réseau privé / liste d'accès) : sinon le secret partagé est la seule protection.
 
 ## 2. Contrat d'export `comet.talentlab.dt-export/v1`
 

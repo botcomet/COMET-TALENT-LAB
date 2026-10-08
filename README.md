@@ -30,16 +30,16 @@ cp .env.example .env                       # facultatif : les valeurs par défau
 uvicorn talentlab.main:app --reload        # http://127.0.0.1:8000  (docs API : /api/docs hors production)
 ```
 
-En mode `dev`, l'écran de connexion propose des comptes **fictifs** (`*.demo@example.invalid`), sans mot de passe. Ce mode est **refusé par la configuration en production**.
+En mode `dev`, l'écran de connexion propose des comptes **fictifs** (`*.demo@example.invalid`), sans mot de passe, **uniquement depuis la boucle locale et jamais derrière un relais**. Ce mode est refusé par la configuration en production ; une valeur d'environnement inconnue est refusée au démarrage.
 
 **Ne téléversez pas de CV réels dans cet environnement.** Voir [docs/SECURITE_RGPD.md](docs/SECURITE_RGPD.md) pour les validations requises avant tout usage réel.
 
 ## Tests
 
 ```bash
-pytest                                      # 161 tests (≈ 50 s) — SQLite
+pytest                                      # 331 tests (≈ 60 s) — SQLite
 pytest -m business                          # 37 tests métier issus du référentiel
-TALENTLAB_TEST_DATABASE_URL=postgresql+psycopg://… pytest tests/test_api_flow.py tests/test_collab_assistant.py   # rejoue l'API sur PostgreSQL
+TALENTLAB_TEST_DATABASE_URL=postgresql+psycopg://… pytest tests/test_api_flow.py tests/test_collab_assistant.py tests/test_security_hardening.py   # rejoue l'API sur PostgreSQL
 TALENTLAB_E2E_CHROME=/chemin/chrome pytest tests/test_e2e_browser.py                                              # parcours navigateur
 ```
 

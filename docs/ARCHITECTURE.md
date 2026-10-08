@@ -76,7 +76,7 @@ Un retour client propose un enseignement **spécifique au client** ; il ne devie
 Texte extrait limité (`max_chars`, 150 000) ; toute espace Unicode est repliée en espace simple (`text.fold`, longueur conservée) et les motifs de champs travaillent sur du texte compacté ; motifs ancrés et mis en cache ; au plus 300 mentions analysées par critère ; **budget de temps par document** (`analysis_timeout_s`, 60 s) : au-delà, échec explicite « timeout » sans score, sans bloquer les autres CV ; profondeur de parenthèses booléennes bornée.
 
 ## 5. Traitement asynchrone
-Les lots de CV sont traités par un pool de threads du processus (`worker_threads`), en mode `inline` pour les tests. Au démarrage, `requeue_stale` relance les documents restés « en cours » après un arrêt. **Limite connue :** ce n'est pas une file durable multi-instance ; pour un déploiement multi-instances il faut une vraie file de tâches (voir INTEGRATION.md).
+Les lots de CV sont traités par un **petit pool de threads par utilisateur** (`worker_threads_per_user`, 2), en mode `inline` pour les tests. L'extraction PDF/DOCX se fait dans un **processus enfant isolé** (`services/extraction.py` : mémoire, CPU et temps bornés, tué au-delà de `extraction_timeout_s`). Au démarrage, `requeue_stale` relance les documents restés « en cours » après un arrêt. **Limite connue :** ce n'est pas une file durable multi-instance ; pour un déploiement multi-instances il faut une vraie file de tâches (voir INTEGRATION.md).
 
 ## 6. Décisions et compromis assumés
 
