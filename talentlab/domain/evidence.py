@@ -500,6 +500,14 @@ def merge_external(ev: CritEvidence, ext: list[ExtEvidence], label: str, *, kind
                 contradictions.append({"type": "limite", "cv_level": level.value, "evidence_id": e.id, "statement": e.excerpt,
                                        "resolution": "Le niveau est ramené à « partiellement démontré » : l'échange précise un périmètre plus restreint que le CV."})
                 level = Level.PARTIAL
+        elif e.kind == EvidenceKind.CAPS:
+            cap = e.level or Level.DECLARED
+            items.append(EvItem("call", e.excerpt, 0, 0, "call", cap, reliability=e.reliability, note="correction du recruteur : niveau plafonné — " + loc_note,
+                                evidence_id=e.id, validated=True))
+            if LEVEL_ORDER[level] > LEVEL_ORDER[cap]:
+                contradictions.append({"type": "correction_recruteur", "cv_level": level.value, "evidence_id": e.id, "statement": e.excerpt,
+                                       "resolution": f"Niveau ramené à « {cap.value.replace('_', ' ')} » par le recruteur."})
+                level = cap
         elif e.kind == EvidenceKind.CONTRADICTS:
             reliable = e.validated or not e.auto_generated
             items.append(EvItem("call", e.excerpt, 0, 0, "call", Level.CONTRADICTED, reliability=Reliability.CONTRADICTION, note="contredit : " + loc_note, evidence_id=e.id, validated=e.validated))

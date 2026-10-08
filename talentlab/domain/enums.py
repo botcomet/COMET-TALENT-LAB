@@ -95,6 +95,7 @@ class EvidenceKind(str, Enum):
     SUPPORTS = "supporte"        # étaye le critère
     LIMITS = "limite"            # borne l'expérience (« que sur deux topics »)
     CONTRADICTS = "contredit"    # démontre l'absence du niveau attendu
+    CAPS = "plafonne"            # correction du recruteur : le niveau ne peut pas dépasser « level » (ex. simple mention surévaluée)
 
 
 class Tier(str, Enum):
