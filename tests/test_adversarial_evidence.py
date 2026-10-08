@@ -342,3 +342,40 @@ def test_a_phantom_range_no_longer_inflates_years_of_experience(grids):
     cv = HDR + "- Kafka : débit de 5000 - 8000 messages par seconde, conception des topics et partitions.\n"
     a = score(grids["TLJ"], cv)
     assert not any("3000" in str(c.justification) for c in a.criteria)
+
+
+# ================================================================ E8 : homonymes
+@pytest.mark.parametrize("brief,key,bullet", [
+    ("INF", "group", "- Développement d'un jeu vidéo en Unity (C#) : stockage des scores, sauvegarde cloud des parties."),
+    ("INF", "group", "- ADMINISTRATION DES SERVEURS DE JEU, VOYAGE A SAN FRANCISCO, CONFIGURATION DES POSTES."),
+    ("TLJ", "spring", "- Livraison de la release Spring 2021 de l'API data de reporting (développement, tests, mise en production)."),
+    ("WMS", "reflex_wms", "- Développement d'applications web avec le framework Python Reflex ; gestion de stock des composants UI ; mise en production."),
+])
+def test_homonyms_are_not_mistaken_for_the_requested_product(grids, brief, key, bullet):
+    # en-tête neutre : le garde-fou d'homonymie est une fenêtre lexicale (un en-tête « Java » à proximité suffirait à valider « Spring »)
+    hdr = "EXPÉRIENCES PROFESSIONNELLES\n\nSociété Exemple — Analyste (Mars 2018 – en cours)\n"
+    a = score(grids[brief], "Consultant\n\n" + hdr + bullet)
+    c = next(x for x in a.criteria if x.key.startswith("group:")) if key == "group" else crit(a, key)
+    assert c.level == ND, f"homonyme crédité : {c.level} — {c.justification[:100]}"
+
+
+def test_a_real_unity_array_still_counts_for_dell_emc(grids):
+    a = score(grids["INF"], "Ingénieur\n\n" + HDR + "- Administration des baies Dell EMC Unity : provisioning des LUN, réplication, zoning SAN, 12 baies.")
+    grp = next(c for c in a.criteria if c.key.startswith("group:"))
+    assert any(m["label"] == "Dell EMC" and m["level"] in (PA, CO) for m in grp.members)
+
+
+# ================================================================ M3 : sous-crédits flagrants (profils anglophones, formulations courantes)
+@pytest.mark.parametrize("brief,key,bullet,minlvl", [
+    ("TLJ", "tech_mgmt", "- Led a team of 4 developers: code reviews, mentoring and sprint planning.", CO),
+    ("TLJ", "kafka", "- Streaming temps réel avec Kafka Streams : agrégations sur 5 topics, 100 000 événements par jour.", PA),
+    ("TLJ", "retail_ecom", "- Développement d'un site marchand : catalogue, panier, paiement, commandes, promotions.", CO),
+    ("TLJ", "retail_ecom", "- Développement d'une boutique en ligne omnicanale : catalogue, panier, paiement, commandes, promotions.", CO),
+    ("TLJ", "retail_ecom", "- Développement d'une plateforme e‑commerce : catalogue, panier, paiement, commandes, promotions.", CO),   # trait d'union insécable
+    ("TLJ", "kafka", "- Operated a Confluent Platform cluster: 12 topics, 3 partitions each, 6 brokers.", PA),
+    ("GTS", "sap_config", "- Configuration de SAP GTS Edition for HANA (E4H) : customs management, compliance management, sanctioned party list screening, 5 pays.", CO),
+])
+def test_real_work_in_common_formulations_is_credited(grids, brief, key, bullet, minlvl):
+    cv = ("Consultant\n\nEXPÉRIENCES\n\nCabinet — Consultant SAP GTS (Janvier 2022 – en cours)\n" if brief == "GTS" else HDR) + bullet
+    got = crit(score(grids[brief], cv), key).level
+    assert ORDER[got] >= ORDER[minlvl], f"sous-crédit : {bullet[:60]} → {got}"

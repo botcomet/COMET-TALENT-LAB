@@ -37,6 +37,7 @@ class SearchGroup:
     rarity: int = 3
     why: str = ""
     combo_text: str = ""            # sous-arbre « k parmi n » déjà rendu (kind == "combo")
+    alternatives: list[str] = field(default_factory=list)       # k parmi n réparti : sous-arbres des requêtes complémentaires (rendus)
 
     def node(self):
         if self.combo_text:
@@ -63,7 +64,15 @@ class SearchVariant:
     def refresh(self) -> "SearchVariant":
         n = self.node()
         self.query = bl.render(n) if n is not None else ""
+        combo = next((g for g in self.groups if g.kind == "combo" and g.alternatives), None)
+        if combo is not None:           # les requêtes complémentaires (k parmi n) suivent TOUTE modification des autres groupes
+            others = [g.node() for g in self.groups if g is not combo and g.node() is not None]
+            others += [Not(OR(*[Term(x) for x in self.negatives]))] if self.negatives else []
+            self.extra_queries = [bl.render(AND(*others, bl.parse(alt)[0])) for alt in combo.alternatives if bl.parse(alt)[0] is not None]
         return self
+
+    def longest(self) -> int:
+        return max([len(self.query), *[len(q) for q in self.extra_queries]])
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -210,7 +219,7 @@ def fit(variant: SearchVariant, profile: PlatformProfile) -> SearchVariant:
     """Retire d'abord le redondant, puis le secondaire, sans casser la logique (§5.3 G)."""
     variant.refresh()
     guard = 0
-    while len(variant.query) > profile.max_length and guard < 200:
+    while variant.longest() > profile.max_length and guard < 200:
         guard += 1
         # 1) alias redondants (le terme court inclut le long)
         done = False
@@ -264,7 +273,7 @@ def fit(variant: SearchVariant, profile: PlatformProfile) -> SearchVariant:
             variant.refresh()
             continue
         break
-    variant.fits = len(variant.query) <= profile.max_length
+    variant.fits = variant.longest() <= profile.max_length
     return variant
 
 
@@ -436,10 +445,9 @@ def build_search_set(title: str, reqs: list[Req], *, extra_titles: list[str] | N
             combo_text, split = single_text, False
         else:                                       # une requête par ancre ; la 1re reste la requête principale
             combo_text, split = bl.render(qs[0]), True
-            strict.extra_queries = [bl.render(AND(*base_nodes, q)) for q in qs[1:]]
         strict.groups.append(SearchGroup(
             id=gr.key, kind="combo", label=gr.label, terms=[], priority=1, protected=True, req_key=gr.key,
-            category=gr.category.value, rarity=5, combo_text=combo_text,
+            category=gr.category.value, rarity=5, combo_text=combo_text, alternatives=[bl.render(q) for q in qs[1:]] if split else [],
             why="Combinaison imposée par le client (§5.5)" + (", répartie en plusieurs requêtes complémentaires." if split else "."),
         ))
     variants["strict"] = fit(strict, profile)

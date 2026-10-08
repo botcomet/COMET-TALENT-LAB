@@ -32,6 +32,8 @@ class Skill:
     depth_terms: tuple[str, ...] = ()
     advanced_terms: tuple[str, ...] = ()
     context_needed: tuple[str, ...] = ()        # garde-fou d'ambiguïté (alias nus)
+    context_forbidden: tuple[str, ...] = ()     # un de ces mots à proximité écarte l'occurrence (homonyme : « Reflex » framework Python)
+    exclude_after: tuple[str, ...] = ()         # mots qui, juste après l'alias, en font un autre objet (« SAN Francisco »)
     case_sensitive: tuple[str, ...] = ()        # alias à comparer en respectant la casse
     volatile: bool = False                      # la récence compte par défaut
     boolean_generic: bool = False               # trop générique pour un booléen
@@ -126,10 +128,14 @@ def mentions(sk: Skill, text: str, folded: str | None = None, window: int = 160)
     for alias, cs, rx in _patterns(sk):
         target = text if cs else folded
         for m in rx.finditer(target):
-            if sk.context_needed and " " not in alias and "-" not in alias:
+            if sk.exclude_after and re.match(r"\s+(?:" + "|".join(re.escape(w) for w in sk.exclude_after) + r")\b", folded[m.end():m.end() + 20]):
+                continue
+            if (sk.context_needed or sk.context_forbidden) and " " not in alias and "-" not in alias:
                 lo, hi = max(0, m.start() - window), min(len(folded), m.end() + window)
                 around = folded[lo:hi]
-                if not any(re.search(term_pattern(c), around) for c in sk.context_needed):
+                if sk.context_needed and not any(re.search(term_pattern(c), around) for c in sk.context_needed):
+                    continue
+                if sk.context_forbidden and any(re.search(term_pattern(c), around) for c in sk.context_forbidden):
                     continue
             found.append((m.start(), m.end(), alias))
     # supprime les occurrences incluses dans une plus longue (Kafka ⊂ Kafka Connect)
@@ -185,9 +191,9 @@ S("java", "Java", "tech", [],
   depth_terms=["microservices", "api rest", "jvm", "multithread", "concurrence", "performance", "architecture", "tests unitaires", "junit"],
   related=["JEE", "J2EE", "Java EE"])
 S("spring", "Spring Boot", "tech", ["Spring", "Spring Framework", "Spring MVC", "Spring Data", "Spring Cloud", "Spring Batch", "Spring Security"],
-  family="jvm", rarity=3, context_needed=["boot", "java", "mvc", "data", "security", "cloud", "batch", "framework", "microservice", "jpa", "hibernate", "api"],
+  family="jvm", rarity=3, context_needed=["boot", "java", "mvc", "jpa", "hibernate", "microservice", "microservices", "maven", "gradle", "kotlin", "jvm", "bean", "beans", "jdbc"],
   depth_terms=["microservices", "rest", "jpa", "hibernate", "batch", "security", "actuator", "tests"])
-S("kafka", "Kafka", "tech", ["Apache Kafka"],
+S("kafka", "Kafka", "tech", ["Apache Kafka", "Confluent Platform", "Confluent Cloud"],
   related=["Confluent", "Kafka Connect", "Kafka Streams", "Schema Registry", "Avro", "RabbitMQ", "Pulsar"],
   family="messaging", rarity=4, volatile=True,
   depth_terms=["producer", "producteur", "producteurs", "consumer", "consommateur", "consommateurs", "topic", "topics", "partition",
@@ -288,8 +294,10 @@ S("sap_s4", "SAP S/4HANA", "product", ["S/4HANA", "S4HANA", "S/4", "SAP S4"], fa
 S("sap_amoa", "SAP AMOA", "activity", ["AMOA", "assistance à maîtrise d'ouvrage", "Business Analyst SAP", "consultant fonctionnel"], family="sap", rarity=3,
   depth_terms=["expression de besoin", "specifications fonctionnelles", "ateliers", "recette", "coordination", "integrateur"],
   confusable_with=["sap_config"])
-S("sap_config", "Paramétrage SAP", "activity", ["customizing", "paramétrage", "SPRO", "configuration SAP", "customisation"], family="sap", rarity=4,
-  depth_terms=["spro", "customizing", "parametrage", "configuration", "enhancement", "badi", "abap", "tests unitaires", "transport", "tables de configuration"],
+S("sap_config", "Paramétrage SAP", "activity", ["customizing", "paramétrage", "SPRO", "configuration SAP", "customisation", "configuration de SAP", "paramétrage de SAP",
+                                                   "configuration dans SAP", "paramétrage dans SAP", "customizing SAP", "configuration du système SAP"], family="sap", rarity=4,
+  depth_terms=["spro", "customizing", "parametrage", "configuration", "enhancement", "badi", "abap", "tests unitaires", "transport", "tables de configuration",
+               "customs management", "compliance management", "sanctioned party", "preference management", "feeder system"],
   advanced_terms=["spro", "customizing", "badi", "abap", "enhancement", "transport"], confusable_with=["sap_amoa"],
   narrowers=["SPRO", "customizing"])
 S("abap", "ABAP", "tech", [], family="sap", rarity=4)
@@ -313,17 +321,20 @@ S("dell_emc", "Dell EMC", "product", ["DellEMC", "EMC", "Dell EMC PowerStore", "
 S("powerstore", "PowerStore", "product", ["Dell PowerStore"], family="infra-stockage", rarity=5)
 S("powermax", "PowerMax", "product", ["Dell PowerMax", "VMAX"], family="infra-stockage", rarity=5)
 S("unity", "Unity", "product", ["Dell Unity", "EMC Unity", "Unity XT"], family="infra-stockage", rarity=5,
-  context_needed=["dell", "emc", "stockage", "storage", "baie", "san", "nas", "lun", "array"])
+  context_needed=["dell", "emc", "powerstore", "baie", "baies", "san", "nas", "lun", "array", "unisphere"],
+  context_forbidden=["jeu", "jeux", "game", "games", "gaming", "c#", "unity3d", "gameobject", "video", "3d"])
 S("rubrik", "Rubrik", "product", [], family="infra-sauvegarde", rarity=5,
   depth_terms=["sauvegarde", "backup", "restauration", "politiques", "sla domain", "replication", "archivage", "cdm"])
 S("san", "SAN", "tech", ["Storage Area Network", "stockage SAN", "réseau SAN", "fibre channel", "FC SAN"], family="infra-stockage", rarity=4, case_sensitive=["SAN"],
+  exclude_after=["francisco", "diego", "jose", "antonio", "marino", "remo", "sebastian", "salvador", "juan", "pedro", "paulo", "paolo", "fernando", "miguel", "luis"],
   depth_terms=["zoning", "lun", "multipath", "fibre channel", "switch", "brocade", "mds", "masking", "replication"])
 S("vmware", "VMware", "product", ["vSphere", "ESXi", "vCenter"], family="infra", rarity=3)
 S("veeam", "Veeam", "product", [], family="infra-sauvegarde", rarity=3)
 
 # ---------- WMS / logistique / legacy
 S("reflex_wms", "Reflex WMS", "product", ["Reflex", "Hardis Reflex", "Reflex Hardis", "WMS Reflex"], family="logistique", rarity=5,
-  context_needed=["wms", "hardis", "entrepot", "logisti", "stock", "picking", "preparation", "expedition"],
+  context_needed=["wms", "hardis", "entrepot", "logisti", "picking", "warehouse"],
+  context_forbidden=["python", "framework", "react", "composants ui", "front-end", "frontend", "javascript", "web app"],
   depth_terms=["parametrage", "flux", "inventaire", "picking", "reception", "expedition", "tma", "run", "incidents", "recette"])
 S("wms", "WMS", "domain", ["Warehouse Management System", "gestion d'entrepôt"], family="logistique", rarity=3)
 S("as400", "AS400", "tech", ["AS/400", "IBM i", "iSeries", "RPG"], family="legacy", rarity=4)
@@ -342,7 +353,8 @@ S("security_by_design", "Security by design", "activity", ["sécurité des proje
 
 # ---------- Domaines métier
 S("retail_ecom", "Retail / e-commerce", "domain",
-  ["e-commerce", "ecommerce", "retail", "omnicanal", "omnichannel", "parcours d'achat", "OMS", "Order Management", "click and collect", "grande distribution"],
+  ["e-commerce", "ecommerce", "retail", "omnicanal", "omnicanale", "omnichannel", "parcours d'achat", "OMS", "Order Management", "click and collect", "grande distribution",
+   "site marchand", "boutique en ligne", "marketplace", "place de marché", "vente en ligne", "commerce en ligne", "web-to-store"],
   label_is_term=False, family="metier", rarity=3, case_sensitive=["OMS"],
   depth_terms=["commandes", "paiement", "stock", "catalogue", "panier", "magasins", "sites web", "back-office", "back office", "promotions", "livraison", "retours"],
   note="Un environnement e-commerce ≠ avoir développé une plateforme e-commerce (§6.5)")
@@ -371,9 +383,11 @@ S("architecture", "Architecture", "activity",
   advanced_terms=["design authority", "dossier d'architecture", "decisionnaire", "architecture cible", "adr", "structurant", "trajectoire"],
   note="Rédiger des spécifications fonctionnelles ≠ responsabilité d'architecture (§15.1)")
 S("tech_mgmt", "Encadrement technique", "activity",
-  ["tech lead", "lead technique", "lead développeur", "encadrement technique", "encadrement d'équipe", "management technique", "chef d'équipe technique", "mentorat"],
+  ["tech lead", "lead technique", "lead développeur", "encadrement technique", "encadrement d'équipe", "management technique", "chef d'équipe technique", "mentorat",
+   "technical lead", "team lead", "engineering lead", "lead developer", "led a team", "managed a team", "mentoring"],
   family="management", rarity=3,
-  depth_terms=["encadre", "encadrement", "equipe de", "developpeurs", "revues de code", "code review", "mentorat", "coaching", "onboarding", "arbitrage", "planification", "standards"],
+  depth_terms=["encadre", "encadrement", "equipe de", "developpeurs", "revues de code", "code review", "mentorat", "coaching", "onboarding", "arbitrage", "planification", "standards",
+               "team of", "developers", "mentoring", "mentor", "sprint planning", "technical decisions", "hiring", "recrutement"],
   advanced_terms=["revues de code", "code review", "arbitrage", "planification", "standards", "mentorat"])
 S("migration", "Migration / transformation", "activity", ["migration", "transformation", "modernisation", "replatforming"], family="projet", rarity=2, label_is_term=False,
   depth_terms=["cutover", "bascule", "rollback", "plan de migration", "inventaire", "mapping", "recette", "deploiement", "go live", "perimetre"])

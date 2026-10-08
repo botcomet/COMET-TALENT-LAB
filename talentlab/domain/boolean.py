@@ -146,7 +146,10 @@ def tokenize(q: str) -> tuple[list[tuple[str, str, int]], list[Issue]]:
         elif m.group("rp"):
             toks.append((")", ")", m.start()))
         elif m.group("q") is not None:
-            toks.append(("T", m.group("q"), m.start()))
+            if not m.group("q").strip():
+                issues.append(Issue("EMPTY_PHRASE", "error", "Expression exacte vide (\"\") : elle ne filtre rien et fausse la logique de la requête.", m.start()))
+            else:
+                toks.append(("T", m.group("q"), m.start()))
         else:
             w = m.group("w")
             toks.append((w, w, m.start()) if w in ("AND", "OR", "NOT") else ("T", w, m.start()))
@@ -167,6 +170,10 @@ class _Parser:
         return tok
 
     def parse_or(self) -> Node | None:
+        if self.peek() in ("OR", "AND"):
+            op = self.t[self.i][0]
+            self.issues.append(Issue("DANGLING_OPERATOR", "error", f"{op} sans opérande à gauche.", self.t[self.i][2]))
+            self.eat()
         left = self.parse_and()
         items = [left] if left is not None else []
         while self.peek() == "OR":
@@ -229,7 +236,13 @@ class _Parser:
 def _mixed_precedence(toks: list[tuple[str, str, int]]) -> bool:
     """A OR B AND C sans parenthèses : la priorité réelle dépend de la plateforme."""
     depth_ops: list[set[str]] = [set()]
+    prev = None
     for kind, _v, _p in toks:
+        operand_start = kind in ("T", "(", "NOT")
+        if operand_start and prev in ("T", ")"):          # « Kafka Java OR Spring » : le blanc est un AND implicite
+            depth_ops[-1].add("AND")
+            if len(depth_ops[-1]) > 1:
+                return True
         if kind == "(":
             depth_ops.append(set())
         elif kind == ")":
@@ -239,6 +252,7 @@ def _mixed_precedence(toks: list[tuple[str, str, int]]) -> bool:
             depth_ops[-1].add(kind)
             if len(depth_ops[-1]) > 1:
                 return True
+        prev = kind
     return False
 
 
@@ -260,9 +274,13 @@ def parse(query: str) -> tuple[Node | None, list[Issue]]:
         issues.append(Issue("MIXED_PRECEDENCE", "error",
                             "AND et OR mélangés au même niveau sans parenthèses : la priorité logique est ambiguë. Parenthéser chaque groupe OR."))
     # opérateurs écrits en minuscules : traités comme des mots par la plupart des plateformes
-    for kind, val, pos in toks:
-        if kind == "T" and val in ("and", "or", "not") :
-            issues.append(Issue("LOWERCASE_OPERATOR", "warning", f"« {val} » en minuscules est lu comme un mot-clé, pas comme un opérateur.", pos))
+    for i, (kind, val, pos) in enumerate(toks):
+        if kind == "T" and val in ("and", "or", "not"):
+            before = toks[i - 1][0] if i else None
+            after = toks[i + 1][0] if i + 1 < len(toks) else None
+            between = before in ("T", ")") and after in ("T", "(")
+            issues.append(Issue("LOWERCASE_OPERATOR", "error" if between else "warning",
+                                f"« {val} » en minuscules est lu comme un mot-clé, pas comme un opérateur" + (" : la requête ne veut pas dire ce qu'elle semble dire (écrire " + val.upper() + ")." if between else "."), pos))
     if any(k == "NOT" for k, _, _ in toks):
         issues.append(Issue("NOT_USED", "warning",
                             "Un filtre négatif peut exclure des CV pertinents : n'utiliser NOT que pour un faux positif identifié et justifié (§5.3 F)."))

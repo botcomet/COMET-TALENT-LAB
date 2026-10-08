@@ -67,7 +67,12 @@ def custom(db: Session, user: User, m: Mission, query: str, strategy: str = "bal
 
 
 def lineage_queries(db: Session, search: Search) -> list[str]:
-    return [s.query for s in db.scalars(select(Search).where(Search.mission_id == search.mission_id, Search.lineage == search.lineage))]
+    """Toutes les requêtes déjà proposées pour la MISSION (toutes lignées, requêtes complémentaires comprises) : une requête déjà vue n'est jamais rejouée."""
+    out: list[str] = []
+    for s in db.scalars(select(Search).where(Search.mission_id == search.mission_id)):
+        out.append(s.query)
+        out.extend((s.variant or {}).get("extra_queries", []))
+    return out
 
 
 def record_feedback(db: Session, user: User, m: Mission, search: Search, payload: dict[str, Any]) -> dict[str, Any]:

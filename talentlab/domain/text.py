@@ -11,7 +11,15 @@ import unicodedata
 from dataclasses import dataclass
 
 
+_HYPHENS = "\u2010\u2011\u2012\u2212"
+_SPACES = "\u00a0\u202f\u2009\u2007"
+
+
 def _fold_char(c: str) -> str:
+    if c in _HYPHENS:
+        return "-"                                  # « e‑commerce » (trait d'union insécable) = « e-commerce »
+    if c in _SPACES:
+        return " "
     d = unicodedata.normalize("NFD", c)
     base = d[0] if d else c
     low = base.lower()

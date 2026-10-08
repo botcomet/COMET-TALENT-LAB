@@ -329,3 +329,67 @@ def test_missing_skill_reported_by_recruiter_becomes_a_required_group():
     p = optimize(v, fb, reqs, title=B.TLJ_TITLE, history=[v.query])
     assert p.variant is not None and "Kafka" in p.variant.query
     assert not bl.matches(p.variant.query, "Tech Lead. Java.")
+
+
+# ================================================================ revue adverse : validation et optimiseur
+@pytest.mark.parametrize("query,code", [
+    ("Kafka Java OR Spring", "MIXED_PRECEDENCE"),             # le blanc est un AND implicite : mélangé à OR sans parenthèses
+    ("(Kafka or Spring) AND Java", "LOWERCASE_OPERATOR"),      # « or » lu comme un mot : la requête ne dit pas ce qu'elle semble dire
+    ("OR Kafka", "DANGLING_OPERATOR"),
+    ("AND Kafka", "DANGLING_OPERATOR"),
+    ('"" AND Kafka', "EMPTY_PHRASE"),
+])
+def test_ambiguous_or_meaningless_queries_are_errors_not_warnings(query, code):
+    issues = bl.validate(query)
+    assert any(i.code == code and i.severity == "error" for i in issues), [i.to_dict() for i in issues]
+    assert not bl.is_valid(query)
+
+
+def test_well_formed_queries_stay_valid():
+    for q in ['(Kafka OR Spring) AND Java', '"Tech Lead" AND (Kafka OR "Spring Boot")', 'Kafka AND Java AND Spring']:
+        assert bl.is_valid(q), q
+
+
+def _tlj_set():
+    reqs = _validated(B.TLJ_TITLE, B.TLJ)
+    return reqs, build_search_set(B.TLJ_TITLE, reqs)
+
+
+def test_optimizer_never_proposes_a_not_on_a_term_the_query_or_the_client_requires():
+    reqs, ss = _tlj_set()
+    v = ss.variants["balanced"]
+    for bad in ("Kafka", "Java", "Spring", "Tech Lead"):
+        from talentlab.domain.search_optimizer import _add_not
+        refused: list[str] = []
+        assert list(_add_not(v, [bad], reqs, refused)) == [] and refused == [bad]          # refus direct
+        fb = Feedback(result_count=300, relevance="mauvaise", tags=["faux_positifs_recurrents"], false_positive_terms=[bad])
+        prop = optimize(v, fb, reqs, title=B.TLJ_TITLE, history=[v.query])
+        if prop.variant is not None:
+            q = prop.variant.query
+            assert f"NOT {bad}" not in q and f'NOT "{bad}"' not in q and not (f'NOT ({bad}' in q), q
+            assert bl.is_valid(q)
+        assert any("refusé" in a for a in prop.diagnosis.advice), prop.diagnosis.advice
+
+
+def test_missing_skill_keeps_the_imperative_union_and_says_it_is_a_sourcing_choice():
+    reqs, ss = _tlj_set()
+    v = ss.variants["exploratory"]
+    fb = Feedback(result_count=300, relevance="mauvaise", tags=["competence_absente"], missing_skill="Avro")
+    prop = optimize(v, fb, reqs, title=B.TLJ_TITLE, history=[v.query])
+    assert prop.variant is not None
+    q = prop.variant.query
+    assert "Avro" in q and all(t in q for t in ("Kafka", "Spring", "Java")), "les impératifs déjà imposés ne disparaissent pas : " + q
+    assert any("choix de sourcing" in t for t in prop.tradeoffs)
+
+
+def test_strict_complementary_queries_follow_every_modification_and_all_fit():
+    reqs = _validated(B.INF_TITLE, B.INF)
+    ss = build_search_set(B.INF_TITLE, reqs)
+    v = ss.variants["strict"]
+    assert v.extra_queries, "précondition : 2 parmi 4 réparti en plusieurs requêtes"
+    n = len(v.extra_queries)
+    fb = Feedback(result_count=0, relevance=None, tags=[])
+    prop = optimize(v, fb, reqs, title=B.INF_TITLE, history=[v.query, *v.extra_queries])
+    if prop.variant is not None:
+        assert len(prop.variant.extra_queries) == n, "les requêtes complémentaires de la combinaison imposée ne sont pas perdues"
+        assert all(len(q) <= 250 and bl.is_valid(q) for q in [prop.variant.query, *prop.variant.extra_queries])

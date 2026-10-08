@@ -247,11 +247,19 @@ def analyze_window(win: str, sk: lx.Skill | None, *, own_sentence: str | None = 
         action = "weak"
     else:
         action = "weak" if _WEAK_ACTION.search(own_m) else "none"
+    if action == "none" and kind == "skill" and mention_pos is not None and not stack_early(flat, f, o0, o1) and not caps:
+        # style nominal (« Streaming temps réel avec Kafka Streams : agrégations sur 5 topics, 100 000 événements par jour ») : sans verbe, mais chiffré et détaillé
+        if sk and len(_distinct(sk.depth_terms, own_m)) >= 2 and _distinct(_QUANT, own_m):
+            action = "weak"
     role = "participant" if _PARTICIPANT.search(own_m) else ("owner" if _OWNER.search(fm) else "neutral")
     depth = _distinct(sk.depth_terms, fm) if sk else []
     stack = bool(mention_pos is not None and cl.is_stack_list(flat[o0:o1], f[o0:o1]))
     return Signals(action=action, verbs=verbs, role=role, depth=depth, quant=_distinct(_QUANT, fm), results=_distinct(_RESULT, fm),
                    deliverables=_distinct(_DELIVERABLE, fm), non_pro=any(c.code == "personal" for c in caps), negated=negated, caps=caps, stack_list=stack)
+
+
+def stack_early(flat: str, f: str, o0: int, o1: int) -> bool:
+    return cl.is_stack_list(flat[o0:o1], f[o0:o1])
 
 
 def classify(sg: Signals, sk: lx.Skill | None, kind: str, *, role_sensitive: bool = True) -> tuple[Level, str]:
@@ -319,7 +327,8 @@ def skill_for(key: str, terms: list[str], label: str) -> lx.Skill:
     sk = lx.skill(key.split(":", 1)[1]) if ":" in key else None
     if sk is None:
         return _adhoc_skill(terms, label)
-    extra = [t for t in terms if t not in sk.aliases]
+    covered = {a for ck in sk.umbrella_of if (child := lx.skill(ck)) is not None for a in child.aliases}      # les gammes gardent leurs propres garde-fous d'homonymie
+    extra = [t for t in terms if t not in sk.aliases and t not in covered]
     if extra:       # alias complémentaires (gammes repliées dans leur constructeur…)
         from dataclasses import replace
         return replace(sk, aliases=tuple(dict.fromkeys([*sk.aliases, *extra])))
@@ -397,6 +406,17 @@ def evaluate_text_criterion(parsed: ParsedCV, key: str, label: str, terms: list[
     scope_terms = scope_terms or []
     role_sensitive = sk.key != "run_n3"
     hits: list[tuple[int, int, str]] = list(lx.mentions(sk, text, folded))
+    for ck in sk.umbrella_of:                      # « Dell EMC (PowerStore, PowerMax, Unity) » : chaque gamme est cherchée avec SES garde-fous
+        if (child := lx.skill(ck)) is not None:
+            hits += list(lx.mentions(child, text, folded))
+    if sk.umbrella_of:
+        hits.sort(key=lambda t: (t[0], -(t[1] - t[0])))
+        pruned: list[tuple[int, int, str]] = []
+        for h in hits:
+            if pruned and h[0] >= pruned[-1][0] and h[1] <= pruned[-1][1]:
+                continue
+            pruned.append(h)
+        hits = pruned
     items: list[EvItem] = []
     if kind == "activity" and sk.depth_terms:      # une activité se prouve aussi par ses composants, sans que son nom apparaisse
         for exp in parsed.experiences:

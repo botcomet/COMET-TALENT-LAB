@@ -133,7 +133,7 @@ Step = tuple[str, SearchVariant, list[str]]       # (explication, variante, comp
 
 def _clone(v: SearchVariant) -> SearchVariant:
     c = SearchVariant(strategy=v.strategy, groups=copy.deepcopy(v.groups), negatives=list(v.negatives),
-                      extra_queries=[], trimmed=list(v.trimmed))
+                      extra_queries=list(v.extra_queries), trimmed=list(v.trimmed))
     return c
 
 
@@ -320,8 +320,24 @@ def _narrow_titles(v: SearchVariant) -> Iterator[Step]:
             yield (f"Intitulé le plus large « {dropped} » retiré pour réduire les métiers voisins.", c.refresh(), ["Un profil qui porte ce seul intitulé sera manqué."])
 
 
-def _add_not(v: SearchVariant, terms: list[str]) -> Iterator[Step]:
-    new = [t for t in terms if fold(t) not in {fold(n) for n in v.negatives}]
+def _add_not(v: SearchVariant, terms: list[str], reqs: list[Req] | None = None, refused: list[str] | None = None) -> Iterator[Step]:
+    """NOT seulement sur un faux positif identifié ET jamais sur un terme que la requête exige ou que le besoin client impose
+    (« AND Kafka … AND NOT Kafka » serait insatisfiable)."""
+    positive = {fold(t) for g in v.groups for t in (g.terms or [])}
+    for g in v.groups:
+        if g.combo_text and (node := bl.parse(g.combo_text)[0]) is not None:
+            positive |= {fold(t) for t in bl.terms_of(node)}
+    required = {fold(t) for r in (reqs or []) if r.status == "active" for t in (*r.terms, r.label)}
+    def conflicts(t: str) -> bool:
+        tf = fold(t)
+        return any(tf == p or tf in p.split() or p in tf.split() or tf in p or p in tf for p in (positive | required) if p)
+    new, bad = [], []
+    for t in terms:
+        if fold(t) in {fold(n) for n in v.negatives}:
+            continue
+        (bad if conflicts(t) else new).append(t)
+    if refused is not None:
+        refused.extend(bad)
     if new:
         c = _clone(v)
         c.negatives = c.negatives + new[:2]
@@ -339,12 +355,23 @@ def _move_missing_skill(v: SearchVariant, reqs: list[Req], skill_text: str) -> I
                 continue
             c = _clone(v)
             pr = max((g.priority for g in c.groups), default=0) + 1
-            c.groups = [g for g in c.groups if g.id != "union"] if any(g.id == "union" for g in c.groups) else c.groups
             c.groups.append(SearchGroup(id=r.key, kind="skill", label=r.label, terms=boolean_terms(r, 2), priority=pr, protected=False,
                                         req_key=r.key, category=r.category.value, rarity=_rarity(r),
                                         why="Compétence signalée comme absente des premiers CV : désormais imposée."))
-            yield (f"« {r.label} » signalée absente des premiers CV : imposée en AND.", c.refresh(), ["Moins de résultats ; risque de manquer un profil qui l'écrit autrement."])
+            trade = ["Moins de résultats ; risque de manquer un profil qui l'écrit autrement."]
+            if r.category.value in ("souhaitable", "contextuel", "fortement_differenciant", "a_clarifier"):
+                trade.append(f"« {r.label} » n'est pas un impératif du client ({r.category.value.replace('_', ' ')}) : l'imposer en recherche est un choix de sourcing, "
+                             "pas une exigence ; le besoin et la grille ne sont pas modifiés.")
+            yield (f"« {r.label} » signalée absente des premiers CV : imposée en AND (les groupes déjà imposés sont conservés).", c.refresh(), trade)
             return
+
+
+def _note_refused(diag: "Diagnosis", refused: list[str]) -> None:
+    for t in dict.fromkeys(refused):
+        msg = (f"NOT « {t} » refusé : ce terme figure dans la requête ou dans le besoin client ; l'exclure rendrait la recherche contradictoire. "
+               "Si le faux positif vient d'un contexte précis, le décrire (autre mot du CV) plutôt que d'exclure la technologie.")
+        if msg not in diag.advice:
+            diag.advice.append(msg)
 
 
 # ----------------------------------------------------------------- échelle de décision
@@ -362,7 +389,9 @@ def _steps(v: SearchVariant, fb: Feedback, diag: Diagnosis, reqs: list[Req], tit
         yield from _narrow_titles(v)
         yield from _narrow_with_narrower(v)
         if fb.false_positive_terms:
-            yield from _add_not(v, fb.false_positive_terms)
+            refused: list[str] = []
+            yield from _add_not(v, fb.false_positive_terms, reqs, refused)
+            _note_refused(diag, refused)
     elif diag.problem == "low_relevance":
         if fb.missing_skill:
             yield from _move_missing_skill(v, reqs, fb.missing_skill)
@@ -371,7 +400,9 @@ def _steps(v: SearchVariant, fb: Feedback, diag: Diagnosis, reqs: list[Req], tit
             yield from _narrow_with_narrower(v)
         if "faux_positifs_recurrents" in fb.tags:
             if fb.false_positive_terms:
-                yield from _add_not(v, fb.false_positive_terms)
+                refused = []
+                yield from _add_not(v, fb.false_positive_terms, reqs, refused)
+                _note_refused(diag, refused)
             yield from _narrow_titles(v)
         if "bons_profils_manquants" in fb.tags:
             yield from _widen_titles(v, reqs, title)

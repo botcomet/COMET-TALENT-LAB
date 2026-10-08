@@ -418,3 +418,23 @@ def test_candidate_status_discard_requires_a_human_reason(tm):
     # l'écart n'efface rien : le profil reste consultable et réévaluable
     assert s.get(f"/api/missions/{mid}/candidates/{c['id']}").status_code == 200
     assert s.post(f"/api/missions/{mid}/candidates/{c['id']}/reassess", json={"reason": "nouvelle info"}).status_code == 200
+
+
+def test_search_history_covers_the_whole_mission_so_no_query_is_replayed_across_lineages(tm):
+    s = tm(1)
+    m = create_mission(s, B.INF_TITLE, B.INF)
+    freeze(s, m["id"])
+    gens = s.post(f"/api/missions/{m['id']}/searches/generate").json()
+    from talentlab.db import session_scope
+    from talentlab.models import Search
+    from talentlab.services.searches import lineage_queries
+    with session_scope() as db:
+        rows = db.query(Search).filter(Search.mission_id == m["id"]).all()
+        one = next(r for r in rows if r.strategy == "exploratory")
+        hist = set(lineage_queries(db, one))
+        for r in rows:
+            assert r.query in hist, "la requête d'une autre lignée doit compter comme déjà proposée"
+            for extra in (r.variant or {}).get("extra_queries", []):
+                assert extra in hist, "les requêtes complémentaires comptent aussi"
+        assert any((r.variant or {}).get("extra_queries") for r in rows), "précondition : la stricte INF a des requêtes complémentaires"
+    assert len(gens) == 3
