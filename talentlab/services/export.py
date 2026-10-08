@@ -17,21 +17,11 @@ from sqlalchemy.orm import Session
 from ..domain.cv_extract import parse_cv
 from ..domain.enums import Category, Level
 from ..domain.evidence import _items
+from ..domain.safety import scrub
 from ..domain.text import fold
 from ..models import Candidate, Document, Evidence, EvidenceReview, Mission, MissionSource
 from . import matching as mt
 from . import missions as ms
-
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_PHONE = re.compile(r"(?<!\d)(?:\+?\d{1,3}[\s.-]?)?(?:\(?0?\d\)?[\s.-]?){4,6}\d{2}(?!\d)")
-_URL = re.compile(r"(?:https?://|www\.)\S+|linkedin\.com/\S+", re.I)
-
-
-def scrub(text: str) -> str:
-    """Retire les coordonnées directes : un dossier présenté au client ne les expose jamais (§19.2)."""
-    t = _URL.sub("[lien retiré]", text)
-    t = _EMAIL.sub("[email retiré]", t)
-    return _PHONE.sub(lambda m: "[numéro retiré]" if len(re.sub(r"\D", "", m.group(0))) >= 9 else m.group(0), t)
 
 
 def _bullets(text: str, a: int, b: int) -> list[tuple[int, int, str]]:

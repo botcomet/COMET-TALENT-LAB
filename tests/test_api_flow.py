@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from tests.conftest import HDR, Session, create_mission, freeze, pdf, upload
+from tests.conftest import HDR, Session, create_mission, freeze, pdf, sqlite_only, upload
 from tests.fixtures import briefs as B, cvs as C
 from tests.helpers import make_docx, make_encrypted_pdf, make_image_only_pdf
 
@@ -30,6 +30,29 @@ def test_security_headers_present(app):
         h = c.get("/api/health").headers
         assert "default-src 'self'" in h["content-security-policy"] and "script-src 'self'" in h["content-security-policy"]
         assert h["x-content-type-options"] == "nosniff" and h["x-frame-options"] == "DENY"
+        assert h["referrer-policy"] == "no-referrer" and h["cache-control"] == "no-store"          # l'API ne se met jamais en cache
+        csp = h["content-security-policy"]
+        assert "frame-ancestors 'none'" in csp and "object-src 'none'" in csp and "unsafe-inline" not in csp and "unsafe-eval" not in csp
+
+
+def test_session_cookie_flags_forged_cookie_and_secure_flag_in_production(app):
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+    from starlette.responses import Response
+    from talentlab.config import Settings
+    from talentlab.models import User
+    from talentlab.security import issue_session
+    with TestClient(app, headers=HDR) as c:
+        r = c.post("/api/auth/dev-login", json={"email": "tm1.demo@example.invalid"})
+        sc = r.headers["set-cookie"].lower()
+        assert "httponly" in sc and "samesite=lax" in sc and "path=/" in sc
+        c.cookies.clear()
+        c.cookies.set("talentlab_session", "cookie-forge-sans-signature")
+        assert c.get("/api/missions").status_code == 401, "un cookie non signé par le serveur n'ouvre aucune session"
+    prod = Settings(env="prod", auth_mode="gateway", gateway_secret="g", session_secret="s", encryption_key=Fernet.generate_key().decode(), database_url="postgresql://x/y")
+    resp = Response()
+    issue_session(resp, User(id="u1", email="x@example.invalid", display_name="X"), prod)
+    assert "secure" in resp.headers["set-cookie"].lower()
 
 
 def test_gateway_mode_requires_shared_secret_and_provisioned_user(app_env, monkeypatch):
@@ -350,6 +373,7 @@ def test_audit_log_is_hash_chained_and_tamper_evident(tm, app):
     admin.close()
 
 
+@sqlite_only
 def test_candidate_data_is_encrypted_at_rest_and_audit_has_no_cv_content(tm, app_env):
     s = tm(1)
     mid = _setup_tlj(s)

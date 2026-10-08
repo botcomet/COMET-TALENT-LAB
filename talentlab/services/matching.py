@@ -22,6 +22,7 @@ from ..domain.evidence import ExtEvidence
 from ..domain.safety import scan_text
 from ..domain.scoring import CandidateFacts, assess, compare as compare_assessments, diff_assessments
 from ..domain.text import fold
+from ..domain.safety import scrub
 from ..models import (Assessment, CallNote, Candidate, Document, Evidence, EvidenceReview, Grid, Mission, Proposal, Qualification, ScoringCorrection, User)
 from ..enums_app import CANDIDATE_STATUSES
 from . import missions as ms
@@ -315,10 +316,11 @@ def correct_criterion(db: Session, user: User, m: Mission, asm_row: Assessment, 
     db.add(EvidenceReview(evidence_id=e.id, decision="validated", note="Saisie directe du recruteur", reviewer_id=user.id))
     cand = db.get(Candidate, asm_row.candidate_id)
     case = {"criterion": criterion_key, "label": crit["label"], "rule_description": error_nature, "observed_level": old.value, "expected_level": lvl.value,
-            "justification_observed": crit["justification"][:300], "evidence_excerpts": [x["excerpt"][:200] for x in crit["evidence"][:3]],
-            "note": "Cas anonymisé de non-régression : à rejouer sur le moteur ; ne modifie aucune règle automatiquement."}
-    db.add(ScoringCorrection(mission_id=m.id, assessment_id=asm_row.id, criterion_key=criterion_key, old_level=old.value, new_level=lvl.value,
-                             error_nature=error_nature, comment=comment, regression_case=case, created_by=user.id))
+            "justification_observed": scrub(crit["justification"][:300]), "evidence_excerpts": [scrub(x["excerpt"][:200]) for x in crit["evidence"][:3]],
+            "note": "Cas de non-régression dépersonnalisé (coordonnées retirées ; un nom ou un employeur peut subsister) : à rejouer sur le moteur ; "
+                    "ne modifie aucune règle automatiquement. Les extraits de CV sont effacés quand le candidat est supprimé ou purgé."}
+    db.add(ScoringCorrection(mission_id=m.id, assessment_id=asm_row.id, candidate_id=asm_row.candidate_id, criterion_key=criterion_key, old_level=old.value,
+                             new_level=lvl.value, error_nature=error_nature, comment=scrub(comment), regression_case=case, created_by=user.id))
     audit.log(db, user.id, "assessment.correction", "assessment", asm_row.id, m.id, criterion=criterion_key, old=old.value, new=lvl.value, nature=error_nature)
     new = reassess(db, user, m, cand, "correction_recruteur", f"Correction humaine du critère « {crit['label']} » : {error_nature}")
     return {"assessment": new, "regression_case": case}
@@ -402,8 +404,23 @@ def set_status(db: Session, user: User, m: Mission, cand: Candidate, status: str
     return cand
 
 
+def redact_corrections(db: Session, candidate_ids: list[str]) -> int:
+    """Les extraits de CV d'un cas de non-régression ne survivent pas à la suppression du candidat : le cas (critère, niveaux, nature de l'erreur) reste."""
+    n = 0
+    for c in db.scalars(select(ScoringCorrection).where(ScoringCorrection.candidate_id.in_(candidate_ids or [""]))):
+        case = dict(c.regression_case or {})
+        case["evidence_excerpts"] = []
+        case["justification_observed"] = "[effacé : candidat supprimé]"
+        case["redacted"] = True
+        c.regression_case = case
+        c.comment = "[effacé : candidat supprimé]"
+        n += 1
+    return n
+
+
 def delete_candidate(db: Session, user: User, m: Mission, cand: Candidate) -> None:
     audit.log(db, user.id, "candidate.delete", "candidate", cand.id, m.id, ref=cand.ref)
+    redact_corrections(db, [cand.id])
     db.delete(cand)
 
 
@@ -415,6 +432,7 @@ def purge_expired(db: Session, user: User) -> dict[str, int]:
     for d in docs:
         if d.candidate_id:
             cands.add(d.candidate_id)
+    redact_corrections(db, list(cands))
     n_c = 0
     for cid in cands:
         c = db.get(Candidate, cid)

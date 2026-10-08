@@ -168,9 +168,72 @@ def test_recruiter_correction_lowers_level_records_error_nature_and_changes_no_g
     assert sp["level"] == "declare_sans_preuve" and sp["contradictions"][0]["type"] == "correction_recruteur"
     assert r.json()["regression_case"]["rule_description"] == "mention_surevaluee"
     cases = s.get("/api/library/regression-cases").json()
-    assert cases and cases[0]["error_nature"] == "mention_surevaluee" and cases[0]["case"]["note"].startswith("Cas anonymisé")
+    assert cases and cases[0]["error_nature"] == "mention_surevaluee" and cases[0]["case"]["note"].startswith("Cas de non-régression dépersonnalisé")
     # aucune règle globale modifiée : un autre candidat garde exactement son score
     assert s.get(f"/api/missions/{mid}/candidates/{a['id']}").json()["assessment"]["score_documented"] == a_score
+
+
+def _correct_spring(s, mid, cv_text, comment="Spring n'est qu'en environnement ; contact : rh@exemple.invalid"):
+    upload(s, mid, [("b.txt", cv_text.encode())])
+    b = s.get(f"/api/missions/{mid}/candidates").json()[0]
+    asm_id = s.get(f"/api/missions/{mid}/candidates/{b['id']}").json()["assessment_full"]["id"]
+    r = s.post(f"/api/missions/{mid}/candidates/{b['id']}/correction", json={"assessment_id": asm_id, "criterion_key": "skill:spring", "new_level": "declare_sans_preuve",
+                                                                             "error_nature": "mention_surevaluee", "comment": comment})
+    assert r.status_code == 201, r.text
+    return b
+
+
+def test_regression_case_carries_no_contact_details_and_cv_excerpts_do_not_survive_candidate_deletion(tm, app):
+    """RGPD : un cas de non-régression est dépersonnalisé à la création et ses extraits de CV sont effacés avec le candidat (le cas, lui, reste)."""
+    s = tm(1)
+    mid = setup_tlj(s)
+    cv = C.CV_TLJ_B.replace("en Java 17 et Spring Boot 2.", "en Java 17 et Spring Boot 2 (référent : jean.dupont@exemple.invalid, 06 12 34 56 78).")
+    b = _correct_spring(s, mid, cv)
+    case = s.get("/api/library/regression-cases").json()[0]["case"]
+    blob = json.dumps(case, ensure_ascii=False)
+    assert "@" not in blob and "06 12 34 56 78" not in blob and case["evidence_excerpts"]          # nettoyé, mais les extraits sont bien là
+    from talentlab.db import session_scope
+    from talentlab.models import ScoringCorrection
+    with session_scope() as db:
+        assert "@" not in db.query(ScoringCorrection).one().comment                                 # le commentaire libre est nettoyé aussi
+    assert s.delete(f"/api/missions/{mid}/candidates/{b['id']}").status_code == 204
+    after = s.get("/api/library/regression-cases").json()
+    assert len(after) == 1 and after[0]["error_nature"] == "mention_surevaluee" and after[0]["old_level"] != after[0]["new_level"]   # le cas pédagogique subsiste
+    assert after[0]["case"]["evidence_excerpts"] == [] and after[0]["case"]["redacted"] is True
+    assert "effacé" in after[0]["case"]["justification_observed"]
+    with session_scope() as db:
+        assert "effacé" in db.query(ScoringCorrection).one().comment
+
+
+def test_retention_purge_also_erases_cv_excerpts_from_regression_cases(tm, app):
+    s = tm(1)
+    mid = setup_tlj(s)
+    _correct_spring(s, mid, C.CV_TLJ_B)
+    from datetime import date, timedelta
+    from talentlab.db import session_scope
+    from talentlab.models import Document
+    with session_scope() as db:
+        for d in db.query(Document).all():
+            d.expires_at = date.today() - timedelta(days=1)
+    admin = Session(app, "admin.demo@example.invalid")
+    assert admin.post("/api/admin/purge").json()["candidates"] == 1
+    case = s.get("/api/library/regression-cases").json()[0]["case"]
+    assert case["evidence_excerpts"] == [] and case["redacted"] is True
+    admin.close()
+
+
+def test_library_refuses_contact_details_because_it_is_shared_with_the_whole_team(tm):
+    s = tm(1)
+    base = {"kind": "note_metier", "title": "Retour sur un profil Kafka", "role_family": "", "tags": []}
+    for bad in ("Le candidat joignable à prenom.nom@exemple.invalid a bien expliqué ses partitions Kafka.",
+                "Rappeler au 06 12 34 56 78 pour valider la volumétrie annoncée sur Kafka.",
+                "Profil visible sur linkedin.com/in/quelquun avec des missions Kafka détaillées."):
+        r = s.post("/api/library", json={**base, "body": bad})
+        assert r.status_code == 422, bad
+    ok = s.post("/api/library", json={**base, "body": "Demander le débit par seconde et le nombre de partitions ; un chiffre de volume global ne prouve pas Kafka."})
+    assert ok.status_code == 201
+    upd = s.patch(f"/api/library/{ok.json()['id']}", json={"body": "Écrire à jean@exemple.invalid pour confirmer les partitions Kafka."})
+    assert upd.status_code == 422
 
 
 # =============================================================================== bibliothèque & apprentissage (§17)

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .. import audit
 from ..domain import lexicon as lx
+from ..domain.safety import has_contact_details
 from ..models import KnowledgeEntry, Mission, ScoringCorrection, User
 
 KINDS = ("methode_recherche", "booleen", "enseignement_retour_client", "faux_positif", "question_qualification", "erreur_matching", "exemple_preuve", "note_metier")
@@ -20,11 +21,18 @@ def entry_dict(e: KnowledgeEntry, author: str = "") -> dict[str, Any]:
             "version": e.version, "created_at": e.created_at.isoformat(), "updated_at": e.updated_at.isoformat()}
 
 
+def _no_contact_details(*texts: str) -> None:
+    """La bibliothèque est lue par toute l'équipe : aucune coordonnée directe de candidat ou de contact client (RGPD : minimisation)."""
+    if any(has_contact_details(t) for t in texts):
+        raise HTTPException(422, "La bibliothèque est partagée : ne pas y inscrire d'email, de téléphone ni de lien. Décrire la situation sans donnée nominative.")
+
+
 def create(db: Session, user: User, kind: str, title: str, body: str, role_family: str = "", tags: list[str] | None = None, mission_id: str | None = None) -> KnowledgeEntry:
     if kind not in KINDS:
         raise HTTPException(422, f"Type inconnu : {', '.join(KINDS)}")
     if len(title.strip()) < 5 or len(body.strip()) < 20:
         raise HTTPException(422, "Titre et contenu sont obligatoires (contenu : 20 caractères minimum).")
+    _no_contact_details(title, body)
     e = KnowledgeEntry(kind=kind, title=title.strip(), body=body.strip(), role_family=role_family, tags=tags or [], client_specific=True, status="proposed",
                        origin_mission_id=mission_id, author_id=user.id)
     db.add(e)
@@ -36,6 +44,7 @@ def create(db: Session, user: User, kind: str, title: str, body: str, role_famil
 def update(db: Session, user: User, e: KnowledgeEntry, **changes: Any) -> KnowledgeEntry:
     if e.author_id != user.id and user.role != "admin":
         raise HTTPException(403, "Seul l'auteur (ou un administrateur) modifie une entrée ; proposer une nouvelle version sinon.")
+    _no_contact_details(changes.get("title") or "", changes.get("body") or "")
     for k in ("title", "body", "role_family", "tags"):
         if k in changes and changes[k] is not None:
             setattr(e, k, changes[k])

@@ -18,9 +18,14 @@ from tests.helpers import make_docx, make_pdf
 
 pytestmark = pytest.mark.e2e
 ART = Path(__file__).resolve().parent.parent / "e2e-artifacts"
-CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+import glob
+
+# Chromium : variable TALENTLAB_E2E_CHROME, sinon le Chromium Playwright préinstallé ; sans navigateur, les tests sont IGNORÉS (jamais « verts »).
+CHROME = os.environ.get("TALENTLAB_E2E_CHROME") or next(iter(sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome"))), "")
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
+if not (CHROME and os.path.exists(CHROME)):
+    pytest.skip("aucun Chromium disponible (définir TALENTLAB_E2E_CHROME) : parcours navigateur NON exécutés", allow_module_level=True)
 
 
 def _free_port() -> int:

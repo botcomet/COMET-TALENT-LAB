@@ -1,6 +1,8 @@
 """Fixtures d'intégration : application réelle, base SQLite temporaire, traitement des CV synchrone."""
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,10 +16,25 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "business: tests métier")
 
 
+PG_URL = os.environ.get("TALENTLAB_TEST_DATABASE_URL")      # rejoue la suite sur PostgreSQL si défini
+sqlite_only = pytest.mark.skipif(bool(PG_URL), reason="vérification propre au fichier SQLite (couverte séparément sur PostgreSQL)")
+
+
+def _reset_pg() -> None:
+    from sqlalchemy import create_engine
+    from talentlab import models  # noqa: F401
+    from talentlab.db import Base
+    eng = create_engine(PG_URL)
+    Base.metadata.drop_all(eng)
+    eng.dispose()
+
+
 @pytest.fixture()
 def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TALENTLAB_ENV", "test")
-    monkeypatch.setenv("TALENTLAB_DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setenv("TALENTLAB_DATABASE_URL", PG_URL or f"sqlite:///{tmp_path}/test.db")
+    if PG_URL:
+        _reset_pg()
     monkeypatch.setenv("TALENTLAB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TALENTLAB_PROCESSING_MODE", "inline")
     monkeypatch.setenv("TALENTLAB_AUTH_MODE", "dev")
@@ -31,6 +48,8 @@ def app_env(tmp_path, monkeypatch):
         db._engine.dispose()
     db._engine = None
     db._SessionLocal = None
+    if PG_URL:
+        _reset_pg()
 
 
 class Session:
