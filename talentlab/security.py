@@ -34,8 +34,20 @@ def _serializer(s: Settings) -> URLSafeTimedSerializer:
 
 def issue_session(response: Response, user: User, s: Settings | None = None) -> None:
     s = s or get_settings()
-    token = _serializer(s).dumps({"uid": user.id})
+    token = _serializer(s).dumps({"uid": user.id, "e": user.session_epoch or 0})
     response.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=(s.env == "prod"), max_age=s.session_hours * 3600, path="/")
+
+
+def dev_auth_allowed(request: Request, s: Settings | None = None) -> bool:
+    """La connexion de démonstration (sans mot de passe) n'est possible que : en mode dev, en environnement dev/test, depuis la boucle locale, et jamais
+    derrière un relais (en-tête Forwarded / X-Forwarded-* présent) — une instance mal configurée et exposée ne donne pas un accès administrateur."""
+    s = s or get_settings()
+    if s.auth_mode != "dev" or s.env not in ("dev", "test"):
+        return False
+    if any(h in request.headers for h in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip")):
+        return False
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost", "testclient")
 
 
 def clear_session(response: Response) -> None:
@@ -46,8 +58,12 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     s = get_settings()
     user: User | None = None
     if s.auth_mode == "gateway":
-        email = request.headers.get(s.gateway_email_header, "").strip().lower()
-        given = request.headers.get(s.gateway_secret_header, "")
+        emails = request.headers.getlist(s.gateway_email_header)
+        secrets_ = request.headers.getlist(s.gateway_secret_header)
+        if len(emails) != 1 or len(secrets_) != 1:                      # en-tête absent OU dupliqué : une identité ambiguë n'est jamais choisie « au hasard »
+            raise HTTPException(401, "Authentification requise.")
+        email = emails[0].strip().lower()
+        given = secrets_[0]
         if not email or not s.gateway_secret or not hmac.compare_digest(given.encode(), s.gateway_secret.encode()):
             raise HTTPException(401, "Authentification requise.")
         user = db.scalar(select(User).where(User.email == email, User.active.is_(True)))
@@ -57,6 +73,8 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             try:
                 data = _serializer(s).loads(tok, max_age=s.session_hours * 3600)
                 user = db.get(User, data["uid"])
+                if user is not None and data.get("e", 0) != (user.session_epoch or 0):
+                    user = None                                       # cookie antérieur à une déconnexion : révoqué
             except (BadSignature, SignatureExpired, KeyError):
                 user = None
     if user is None or not user.active:

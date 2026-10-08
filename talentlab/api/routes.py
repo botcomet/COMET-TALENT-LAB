@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import audit
@@ -16,7 +16,8 @@ from ..domain import grid as gd
 from ..domain.enums import Category
 from ..models import (Assessment, AuditEvent, CallNote, Candidate, Document, Evidence, EvidenceReview, Grid, KnowledgeEntry, Mission, MissionSource, Proposal,
                       Qualification, Requirement, Search, Share, User)
-from ..security import (access_level, clear_session, current_user, issue_session, mission_dep, require_admin, require_mission)
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from ..security import (COOKIE, access_level, clear_session, dev_auth_allowed, current_user, issue_session, mission_dep, require_admin, require_mission)
 from ..enums_app import CANDIDATE_SOURCE_KINDS
 from ..services import assistant as asst
 from ..services import export as exp
@@ -75,9 +76,9 @@ def health() -> dict[str, Any]:
 
 
 @router.post("/auth/dev-login")
-def dev_login(body: S.DevLogin, response: Response, db: Session = Depends(get_db)):
+def dev_login(body: S.DevLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     s = get_settings()
-    if s.auth_mode != "dev" or s.env == "prod":
+    if not dev_auth_allowed(request, s):
         raise HTTPException(404, "Introuvable.")
     u = db.scalar(select(User).where(User.email == body.email.strip().lower(), User.active.is_(True)))
     if u is None:
@@ -88,7 +89,18 @@ def dev_login(body: S.DevLogin, response: Response, db: Session = Depends(get_db
 
 
 @router.post("/auth/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Déconnexion RÉVOQUANT : le cookie est effacé et l'époque de session de l'utilisateur incrémentée (un cookie copié ne sert plus)."""
+    tok = request.cookies.get(COOKIE)
+    if tok:
+        try:
+            data = URLSafeTimedSerializer(get_settings().resolved_session_secret(), salt="talentlab-session").loads(tok, max_age=get_settings().session_hours * 3600)
+            u = db.get(User, data["uid"])
+            if u is not None and data.get("e", 0) == (u.session_epoch or 0):
+                u.session_epoch = (u.session_epoch or 0) + 1
+                audit.log(db, u.id, "auth.logout", "user", u.id)
+        except (BadSignature, SignatureExpired, KeyError):
+            pass
     clear_session(response)
     return {"ok": True}
 
@@ -100,10 +112,9 @@ def me(user: User = Depends(current_user)):
 
 
 @router.get("/auth/dev-users")
-def dev_users(db: Session = Depends(get_db)):
-    """Liste des comptes FICTIFS de démonstration — disponible uniquement en mode développement."""
-    s = get_settings()
-    if s.auth_mode != "dev" or s.env == "prod":
+def dev_users(request: Request, db: Session = Depends(get_db)):
+    """Liste des comptes FICTIFS de démonstration — disponible uniquement en mode développement, depuis la boucle locale."""
+    if not dev_auth_allowed(request):
         raise HTTPException(404, "Introuvable.")
     return [user_dict(u) for u in db.scalars(select(User).where(User.active.is_(True)).order_by(User.display_name))]
 
@@ -277,8 +288,8 @@ def new_version(body: S.GridNewVersion, ctx=Edit, db: Session = Depends(get_db))
 # ----------------------------------------------------------------- recherches booléennes
 @router.get("/missions/{mission_id}/searches")
 def list_searches(ctx=Strategy, db: Session = Depends(get_db)):
-    m, _, _ = ctx
-    return sr.list_for_mission(db, m)
+    m, level, _ = ctx
+    return sr.list_for_mission(db, m, include_notes=level != "strategie")
 
 
 @router.post("/missions/{mission_id}/searches/generate", status_code=201)
@@ -324,7 +335,8 @@ def boolean_validate(body: S.BooleanCheck, user: User = Depends(current_user)):
 
 # ----------------------------------------------------------------- CV : import, candidats, évaluations
 @router.post("/missions/{mission_id}/cvs", status_code=202)
-async def upload_cvs(files: list[UploadFile] = File(...), ctx=Edit, db: Session = Depends(get_db)):
+def upload_cvs(files: list[UploadFile] = File(...), ctx=Edit, db: Session = Depends(get_db)):
+    """Route SYNCHRONE : FastAPI l'exécute dans son pool de threads, la boucle d'événements (donc tous les autres utilisateurs) n'est jamais bloquée."""
     m, _, user = ctx
     s = get_settings()
     if len(files) > s.max_batch_size:
@@ -332,12 +344,7 @@ async def upload_cvs(files: list[UploadFile] = File(...), ctx=Edit, db: Session 
     limit = s.max_file_mb * 1024 * 1024
     data: list[tuple[str, bytes]] = []
     for f in files:
-        buf = bytearray()
-        while chunk := await f.read(1024 * 1024):
-            buf += chunk
-            if len(buf) > limit + 1:
-                break
-        data.append((f.filename or "document", bytes(buf)))
+        data.append((f.filename or "document", f.file.read(limit + 1)))        # au plus limit+1 octets lus par fichier
     docs = mt.ingest_files(db, user, m, data)
     return {"documents": [mt.doc_dict(d) for d in docs], "grid_frozen": ms.latest_frozen(db, m.id) is not None}
 
@@ -439,7 +446,7 @@ def add_note(cid: str, body: S.NoteIn, ctx=Edit, db: Session = Depends(get_db)):
 
 
 @router.post("/missions/{mission_id}/candidates/{cid}/questions")
-def candidate_questions(cid: str, ctx=Read, db: Session = Depends(get_db)):
+def candidate_questions(cid: str, ctx=Edit, db: Session = Depends(get_db)):          # écrit une Qualification : droit d'édition
     m, _, user = ctx
     return mt.questions(db, user, m, _cand(db, m, cid))
 
@@ -668,6 +675,24 @@ def admin_create_user(body: S.UserIn, db: Session = Depends(get_db), admin: User
     db.add(u)
     db.flush()
     audit.log(db, admin.id, "user.create", "user", u.id, role=body.role)
+    return user_dict(u)
+
+
+@router.patch("/admin/users/{uid_}")
+def admin_patch_user(uid_: str, body: S.UserPatch, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """Désactivation / changement de rôle d'un compte (sortie d'un collaborateur) : tracé, jamais le dernier administrateur actif."""
+    u = db.get(User, uid_)
+    if u is None:
+        raise HTTPException(404, "Compte introuvable.")
+    ch = body.model_dump(exclude_unset=True)
+    leaving_admin = u.role == "admin" and u.active and (ch.get("active") is False or ("role" in ch and ch["role"] != "admin"))
+    if leaving_admin and (db.scalar(select(func.count(User.id)).where(User.role == "admin", User.active.is_(True))) or 0) <= 1:
+        raise HTTPException(409, "Impossible : ce serait le dernier administrateur actif.")
+    for k, v in ch.items():
+        setattr(u, k, v)
+    if ch.get("active") is False:
+        u.session_epoch = (u.session_epoch or 0) + 1                # toute session ouverte est révoquée
+    audit.log(db, admin.id, "user.update", "user", u.id, **{k: (v if k != "display_name" else "…") for k, v in ch.items()})
     return user_dict(u)
 
 

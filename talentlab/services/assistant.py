@@ -61,6 +61,10 @@ def handle(db: Session, user: User, m: Mission, level: str, message: str, *, can
         if prop.variant is None:
             reply["reply"] = "Toutes les transformations automatiques ont déjà été essayées sur cette recherche : " + prop.needs_human
             return reply
+        if not editor:                      # lecture seule : on EXPLIQUE, on n'enregistre rien (aucune écriture sans droit d'édition)
+            reply["reply"] = (f"Assouplissement possible (aucune proposition enregistrée : droits en lecture) :\n{prop.variant.query}\n\n{prop.modification}\n"
+                              "Conséquences : " + " ".join(prop.tradeoffs))
+            return reply
         p = Proposal(mission_id=m.id, kind="search_variant", created_by=user.id,
                      payload={"parent_search_id": s.id, "variant": prop.variant.to_dict(), "modification": prop.modification},
                      explanation=prop.modification, consequences=prop.tradeoffs + ["Les exigences client et la grille de matching ne changent pas."])

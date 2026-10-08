@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,7 @@ from ..domain import qualification as qa
 from ..domain.call_facts import candidate_facts_from, extract_facts, reliability_for, source_for
 from ..domain.cv_extract import ExtractionError, extract_text, parse_cv
 from ..domain.enums import EvidenceKind, EvidenceSource, Level, Reliability
+from ..domain.cv_extract import sniff
 from ..domain.evidence import AnalysisTimeout, ExtEvidence
 from ..domain.safety import scan_text
 from ..domain.scoring import CandidateFacts, assess, compare as compare_assessments, diff_assessments
@@ -27,18 +29,21 @@ from ..domain.safety import scrub
 from ..models import (Assessment, CallNote, Candidate, Document, Evidence, EvidenceReview, Grid, Mission, Proposal, Qualification, ScoringCorrection, User)
 from ..enums_app import CANDIDATE_STATUSES
 from . import missions as ms
+from .extraction import extract_isolated
 
-_executor: ThreadPoolExecutor | None = None
-
-
-def executor() -> ThreadPoolExecutor:
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=get_settings().worker_threads, thread_name_prefix="talentlab-cv")
-    return _executor
+_executors: dict[str, ThreadPoolExecutor] = {}
+_executors_lock = threading.Lock()
 
 
-# ----------------------------------------------------------------- import
+def executor_for(user_id: str) -> ThreadPoolExecutor:
+    """Un petit pool PAR UTILISATEUR : un recruteur qui téléverse des documents lourds (ou piégés) ne prive jamais les autres de traitement."""
+    with _executors_lock:
+        ex = _executors.get(user_id)
+        if ex is None:
+            ex = _executors[user_id] = ThreadPoolExecutor(max_workers=get_settings().worker_threads_per_user, thread_name_prefix=f"talentlab-cv-{user_id[:6]}")
+        return ex
+
+
 def _safe_name(name: str) -> str:
     name = re.sub(r"[^\w.\- ()À-ÿ]", "_", (name or "document").replace("\\", "/").split("/")[-1])[:200]
     return name or "document"
@@ -58,6 +63,10 @@ def ingest_files(db: Session, user: User, m: Mission, files: list[tuple[str, byt
         d = Document(mission_id=m.id, filename=_safe_name(name), sha256_file=h, size=len(data), created_by=user.id, expires_at=exp)
         if len(data) > s.max_file_mb * 1024 * 1024:
             d.status, d.error_code, d.error_message, d.progress, d.stage = "failed", "too_large", f"Le fichier dépasse {s.max_file_mb} Mo.", 100, "refusé"
+        elif data and sniff(data) in ("unsupported", "doc"):
+            d.status, d.error_code, d.progress, d.stage = "failed", "unsupported_type", 100, "refusé"
+            d.error_message = ("Format non pris en charge (PDF, DOCX ou texte uniquement)." if sniff(data) == "unsupported"
+                               else "Le format Word 97-2003 (.doc) n'est pas pris en charge : l'enregistrer en .docx ou PDF.")
         elif h in seen_in_batch or db.scalar(select(Document).where(Document.mission_id == m.id, Document.sha256_file == h, Document.status.in_(("done", "processing", "queued")))):
             d.status, d.stage, d.progress = "duplicate", "doublon (même fichier déjà importé)", 100
             d.duplicate_of = seen_in_batch.get(h)
@@ -78,7 +87,7 @@ def ingest_files(db: Session, user: User, m: Mission, files: list[tuple[str, byt
             if s.processing_mode == "inline":
                 process_document(d.id, user.id)
             else:
-                executor().submit(process_document, d.id, user.id)
+                executor_for(user.id).submit(process_document, d.id, user.id)
     for d in docs:
         db.refresh(d)
     return docs
@@ -89,8 +98,13 @@ def requeue_stale() -> int:
     n = 0
     with session_scope() as db:
         for d in db.scalars(select(Document).where(Document.status.in_(("queued", "processing")))):
+            if d.attempts >= 2:          # déjà tenté deux fois et le service est retombé : pas de boucle de plantage au redémarrage
+                d.status, d.progress, d.stage, d.error_code = "failed", 100, "traitement abandonné", "crash"
+                d.error_message = "Ce document a interrompu le service à deux reprises : il n'est plus retraité. Importer une version normale du CV."
+                d.blob = None
+                continue
             d.status = "queued"
-            executor().submit(process_document, d.id, d.created_by)
+            executor_for(d.created_by).submit(process_document, d.id, d.created_by)
             n += 1
     return n
 
@@ -111,15 +125,23 @@ def process_document(doc_id: str, user_id: str) -> None:
             m = db.get(Mission, d.mission_id)
             if m is None:
                 return
+            d.attempts += 1
+            db.commit()
             _stage(db, d, "processing", 10, "lecture du document")
             try:
-                ex = extract_text(d.blob or b"", d.filename, max_bytes=s.max_file_mb * 1024 * 1024, max_pages=s.max_pages, min_chars=s.min_chars, max_chars=s.max_chars)
+                limits = dict(max_bytes=s.max_file_mb * 1024 * 1024, max_pages=s.max_pages, min_chars=s.min_chars, max_chars=s.max_chars)
+                if s.processing_mode == "inline":
+                    ex = extract_text(d.blob or b"", d.filename, **limits)
+                else:                                           # production : processus isolé, mémoire/CPU/temps bornés
+                    ex = extract_isolated(d.blob or b"", d.filename, timeout_s=s.extraction_timeout_s, memory_mb=s.extraction_memory_mb, **limits)
             except ExtractionError as e:
                 d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec de l'extraction", e.code, e.message
+                d.blob = None                                   # un fichier refusé n'est pas conservé (minimisation, pas d'accumulation)
                 audit.log(db, user_id, "cv.failed", "document", d.id, m.id, code=e.code)
                 return
             except Exception:                                   # noqa: BLE001 — jamais de trace interne dans la réponse
                 d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec de l'extraction", "internal", "Erreur interne lors de la lecture du document."
+                d.blob = None
                 audit.log(db, user_id, "cv.failed", "document", d.id, m.id, code="internal")
                 return
             _stage(db, d, "processing", 40, "structuration du CV")
@@ -264,7 +286,7 @@ def add_candidate_note(db: Session, user: User, m: Mission, cand: Candidate, kin
                          certainty=f.certainty, auto_generated=note.auto_generated, needs_verification=f.needs_verification, why_verify=f.why_verify,
                          source_date=note.note_date, data=f.constraint, created_by=user.id)
         elif f.kind == "client_requirement" and f.topic_key:
-            p = Proposal(mission_id=m.id, kind="requirement_change", created_by=user.id,
+            p = Proposal(mission_id=m.id, kind="requirement_change", created_by=user.id, candidate_id=cand.id,
                          payload={"topic_key": f.topic_key, "topic_label": f.topic_label, "category_hint": f.requirement_hint["category_hint"], "relayed": True,
                                   "statement": f.statement, "author": user.display_name, "source_kind": kind},
                          explanation=f"« {f.statement} » — exigence du poste relayée dans un échange candidat : pas une compétence du candidat. {f.why_verify}",
@@ -426,12 +448,26 @@ def redact_corrections(db: Session, candidate_ids: list[str]) -> int:
     return n
 
 
+def redact_proposals(db: Session, candidate_ids: list[str]) -> int:
+    """Les propositions issues des notes d'un candidat citent un extrait de ses échanges : il est effacé avec lui (la proposition reste, vidée de l'extrait)."""
+    n = 0
+    for p in db.scalars(select(Proposal).where(Proposal.candidate_id.in_(candidate_ids or [""]))):
+        pl = dict(p.payload or {})
+        pl["statement"] = "[effacé : candidat supprimé]"
+        pl["redacted"] = True
+        p.payload = pl
+        p.explanation = "[effacé : candidat supprimé] — proposition issue d'un échange avec un candidat dont les données ont été effacées."
+        n += 1
+    return n
+
+
 def delete_candidate(db: Session, user: User, m: Mission, cand: Candidate) -> None:
     """Effacement complet : le candidat, ses évaluations, preuves et notes (cascade), ET ses documents (fichier et texte chiffrés) ;
     les extraits de CV des cas de non-régression sont effacés ; l'audit ne garde que des identifiants."""
     docs = list(db.scalars(select(Document).where(Document.candidate_id == cand.id)))
     audit.log(db, user.id, "candidate.delete", "candidate", cand.id, m.id, ref=cand.ref, documents=len(docs))
     redact_corrections(db, [cand.id])
+    redact_proposals(db, [cand.id])
     for d in docs:
         db.delete(d)
     db.delete(cand)
@@ -446,6 +482,7 @@ def purge_expired(db: Session, user: User) -> dict[str, int]:
         if d.candidate_id:
             cands.add(d.candidate_id)
     redact_corrections(db, list(cands))
+    redact_proposals(db, list(cands))
     n_c = 0
     for cid in cands:
         c = db.get(Candidate, cid)

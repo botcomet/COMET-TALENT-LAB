@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+# longueurs bornées PAR ÉLÉMENT (une liste de 30 termes de 200 000 caractères n'est pas « bornée »)
+Term = Annotated[str, StringConstraints(max_length=120, strip_whitespace=True)]
+Tag = Annotated[str, StringConstraints(max_length=60, strip_whitespace=True)]
+SpeakerKey = Annotated[str, StringConstraints(max_length=80, strip_whitespace=True)]
+SpeakerRole = Annotated[str, StringConstraints(max_length=40, strip_whitespace=True)]
+SpeakerMap = Annotated[dict[SpeakerKey, SpeakerRole], Field(max_length=20)]
+Id = Annotated[str, StringConstraints(max_length=40, strip_whitespace=True)]
+SourceKindName = Literal["client_imperatif_confirme", "client_precision_validee", "retour_entretien", "brief_officiel", "description_initiale", "note_brief_client"]
 
 
 class Strict(BaseModel):
@@ -24,7 +33,7 @@ class MissionIn(Strict):
 
 
 class SourceIn(Strict):
-    kind: str = Field(max_length=40)
+    kind: SourceKindName
     text: str = Field(min_length=1, max_length=60_000)
     author: str = Field(default="", max_length=200)
     source_date: date | None = None
@@ -37,11 +46,11 @@ class RequirementIn(Strict):
     skill_key: str | None = Field(default=None, max_length=60)
     kind: str | None = Field(default=None, max_length=20)
     dimension: str | None = Field(default=None, max_length=30)
-    terms: list[str] | None = Field(default=None, max_length=30)
-    scope_terms: list[str] | None = Field(default=None, max_length=10)
+    terms: list[Term] | None = Field(default=None, max_length=30)
+    scope_terms: list[Term] | None = Field(default=None, max_length=10)
     depth_required: Literal["practice", "advanced"] = "practice"
     min_years: float | None = Field(default=None, ge=0, le=50)
-    source_kind: str = "brief_officiel"
+    source_kind: SourceKindName = "brief_officiel"
     quote: str = Field(default="", max_length=400)
 
 
@@ -49,20 +58,20 @@ class RequirementPatch(Strict):
     label: str | None = Field(default=None, max_length=200)
     category: Literal["eliminatoire_confirme", "imperatif", "fortement_differenciant", "souhaitable", "contextuel", "a_clarifier"] | None = None
     dimension: str | None = Field(default=None, max_length=30)
-    terms: list[str] | None = Field(default=None, max_length=30)
-    scope_terms: list[str] | None = Field(default=None, max_length=10)
+    terms: list[Term] | None = Field(default=None, max_length=30)
+    scope_terms: list[Term] | None = Field(default=None, max_length=10)
     depth_required: Literal["practice", "advanced"] | None = None
     min_years: float | None = Field(default=None, ge=0, le=50)
     recency_window_years: int | None = Field(default=None, ge=1, le=30)
     recency_sensitive: bool | None = None
-    source_kind: str | None = Field(default=None, max_length=40)
+    source_kind: SourceKindName | None = None
     quote: str | None = Field(default=None, max_length=400)
     rationale: str | None = Field(default=None, max_length=500)
     status: Literal["active", "rejected"] | None = None
 
 
 class ValidateReqs(Strict):
-    ids: list[str] | None = Field(default=None, max_length=200)
+    ids: list[Id] | None = Field(default=None, max_length=200)
 
 
 class GridPatch(Strict):
@@ -89,7 +98,7 @@ class FeedbackIn(Strict):
     result_count: int | None = Field(default=None, ge=0, le=10_000_000)
     relevance: Literal["bonne", "partielle", "mauvaise"] | None = None
     tags: list[Literal["trop_juniors", "mauvaise_expertise", "competence_absente", "faux_positifs_recurrents", "bons_profils_manquants", "autre"]] = Field(default_factory=list, max_length=6)
-    false_positive_terms: list[str] = Field(default_factory=list, max_length=10)
+    false_positive_terms: list[Term] = Field(default_factory=list, max_length=10)
     missing_skill: str = Field(default="", max_length=200)
     missing_profiles_note: str = Field(default="", max_length=2000)
     notes: str = Field(default="", max_length=2000)
@@ -123,7 +132,7 @@ class NoteIn(Strict):
     kind: Literal["candidate_call_note", "transcript", "interview_report", "complementary_doc"] = "candidate_call_note"
     text: str = Field(min_length=1, max_length=100_000)
     auto_generated: bool = False
-    speaker_map: dict[str, str] = Field(default_factory=dict)
+    speaker_map: SpeakerMap = Field(default_factory=dict)
     note_date: date | None = None
 
 
@@ -131,7 +140,7 @@ class BriefNoteIn(Strict):
     kind: Literal["client_brief_note", "client_feedback"] = "client_brief_note"
     text: str = Field(min_length=1, max_length=100_000)
     author: str = Field(default="", max_length=200)
-    speaker_map: dict[str, str] = Field(default_factory=dict)
+    speaker_map: SpeakerMap = Field(default_factory=dict)
 
 
 class ReviewIn(Strict):
@@ -148,7 +157,7 @@ class CorrectionIn(Strict):
 
 
 class CompareIn(Strict):
-    candidate_ids: list[str] = Field(min_length=2, max_length=8)
+    candidate_ids: list[Id] = Field(min_length=2, max_length=8)
 
 
 class ReassessIn(Strict):
@@ -162,7 +171,7 @@ class ShareIn(Strict):
 
 class AssistantIn(Strict):
     message: str = Field(min_length=1, max_length=3000)
-    candidate_ids: list[str] = Field(default_factory=list, max_length=8)
+    candidate_ids: list[Id] = Field(default_factory=list, max_length=8)
     search_id: str | None = Field(default=None, max_length=32)
 
 
@@ -179,7 +188,7 @@ class KnowledgeIn(Strict):
     title: str = Field(min_length=3, max_length=300)
     body: str = Field(min_length=10, max_length=8000)
     role_family: str = Field(default="", max_length=60)
-    tags: list[str] = Field(default_factory=list, max_length=15)
+    tags: list[Tag] = Field(default_factory=list, max_length=15)
     mission_id: str | None = Field(default=None, max_length=32)
 
 
@@ -187,7 +196,7 @@ class KnowledgePatch(Strict):
     title: str | None = Field(default=None, max_length=300)
     body: str | None = Field(default=None, max_length=8000)
     role_family: str | None = Field(default=None, max_length=60)
-    tags: list[str] | None = Field(default=None, max_length=15)
+    tags: list[Tag] | None = Field(default=None, max_length=15)
 
 
 class PublishIn(Strict):
@@ -199,3 +208,10 @@ class UserIn(Strict):
     display_name: str = Field(min_length=2, max_length=120)
     role: Literal["talent_manager", "pilote", "admin"] = "talent_manager"
     region: str = Field(default="", max_length=80)
+
+
+class UserPatch(Strict):
+    active: bool | None = None
+    role: Literal["admin", "pilote", "talent_manager"] | None = None
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    region: str | None = Field(default=None, max_length=80)

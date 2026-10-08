@@ -136,22 +136,23 @@ def save(db: Session, user: User, m: Mission, search: Search, status: str, note:
     return search
 
 
-def list_for_mission(db: Session, m: Mission) -> list[dict[str, Any]]:
+def list_for_mission(db: Session, m: Mission, *, include_notes: bool = True) -> list[dict[str, Any]]:
     out = []
     for s in db.scalars(select(Search).where(Search.mission_id == m.id).order_by(Search.created_at)):
         fbs = list(db.scalars(select(SearchFeedback).where(SearchFeedback.search_id == s.id).order_by(SearchFeedback.created_at)))
-        out.append(search_dict(s, fbs))
+        out.append(search_dict(s, fbs, include_notes=include_notes))
     return out
 
 
-def search_dict(s: Search, fbs: list[SearchFeedback] | None = None) -> dict[str, Any]:
+def search_dict(s: Search, fbs: list[SearchFeedback] | None = None, *, include_notes: bool = True) -> dict[str, Any]:
+    """``include_notes=False`` (niveau « stratégie ») : les notes libres des recruteurs (retours d'exécution, notes de sauvegarde) peuvent citer des candidats."""
     d = {"id": s.id, "mission_id": s.mission_id, "strategy": s.strategy, "lineage": s.lineage, "version": s.version, "platform": s.platform,
          "query": s.query, "length": len(s.query), "extra_queries": s.variant.get("extra_queries", []), "explanation": s.explanation,
          "groups": [{"id": g["id"], "label": g["label"], "terms": g["terms"], "kind": g["kind"], "protected": g["protected"]} for g in s.variant.get("groups", [])],
-         "parent_id": s.parent_id, "modification": s.modification, "status": s.status, "note": s.note, "grid_version": s.grid_version,
+         "parent_id": s.parent_id, "modification": s.modification, "status": s.status, "note": s.note if include_notes else "", "grid_version": s.grid_version,
          "author_id": s.author_id, "created_at": s.created_at.isoformat()}
     if fbs is not None:
         d["feedbacks"] = [{"id": f.id, "result_count": f.result_count, "relevance": f.relevance, "tags": f.tags, "false_positive_terms": f.false_positive_terms,
-                           "missing_skill": f.missing_skill, "notes": f.notes, "diagnosis": f.diagnosis, "resulting_search_id": f.resulting_search_id,
+                           "missing_skill": f.missing_skill, "notes": f.notes if include_notes else "", "diagnosis": f.diagnosis, "resulting_search_id": f.resulting_search_id,
                            "created_at": f.created_at.isoformat()} for f in fbs]
     return d

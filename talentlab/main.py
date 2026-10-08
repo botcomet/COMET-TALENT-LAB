@@ -31,6 +31,46 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' 
        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 
 
+class BodyLimit:
+    """Refuse (413) toute requête dont le corps dépasse la limite : ``Content-Length`` déclaré, ou octets réellement reçus (transfert fragmenté).
+    Import de CV : lot × taille maximale ; toute autre requête : 2 Mo."""
+
+    def __init__(self, app, upload_limit, default_limit: int = 2 * 1024 * 1024):
+        self.app, self.upload_limit, self.default_limit = app, upload_limit, default_limit
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] not in ("POST", "PUT", "PATCH"):
+            return await self.app(scope, receive, send)
+        limit = self.upload_limit() if scope["path"].endswith("/cvs") else self.default_limit
+        declared = next((v for k, v in scope["headers"] if k == b"content-length"), None)
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            return await self._reject(send)
+        received = 0
+
+        async def counted():
+            nonlocal received
+            msg = await receive()
+            if msg["type"] == "http.request":
+                received += len(msg.get("body", b""))
+                if received > limit:
+                    raise _TooLarge()
+            return msg
+        try:
+            await self.app(scope, counted, send)
+        except _TooLarge:
+            await self._reject(send)
+
+    @staticmethod
+    async def _reject(send):
+        body = b'{"detail":"Requ\xc3\xaate trop volumineuse."}'
+        await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+class _TooLarge(Exception):
+    pass
+
+
 def seed_demo_users() -> None:
     with session_scope() as db:
         for email, name, role, region in DEMO_USERS:
@@ -44,14 +84,14 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_engine(s)
-        if s.env != "prod" and s.auth_mode == "dev":
+        if s.env in ("dev", "test") and s.auth_mode == "dev":
             seed_demo_users()
         from .services.matching import requeue_stale
         requeue_stale()
         yield
 
-    app = FastAPI(title="COMET Talent Lab", version="0.1.0", lifespan=lifespan, docs_url="/api/docs" if s.env != "prod" else None,
-                  redoc_url=None, openapi_url="/api/openapi.json" if s.env != "prod" else None, dependencies=[Depends(csrf_guard)])
+    app = FastAPI(title="COMET Talent Lab", version="0.1.0", lifespan=lifespan, docs_url="/api/docs" if s.env in ("dev", "test") else None,
+                  redoc_url=None, openapi_url="/api/openapi.json" if s.env in ("dev", "test") else None, dependencies=[Depends(csrf_guard)])
     app.include_router(router)
 
     @app.middleware("http")
@@ -70,6 +110,7 @@ def create_app() -> FastAPI:
         logging.getLogger("talentlab").exception("Erreur non gérée sur %s %s", request.method, request.url.path)
         return JSONResponse({"detail": "Erreur interne. L'incident a été journalisé."}, status_code=500)
 
+    app.add_middleware(BodyLimit, upload_limit=lambda: get_settings().max_batch_size * get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024)
     if FRONTEND.exists():
         app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
     return app

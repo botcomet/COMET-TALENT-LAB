@@ -28,6 +28,7 @@ class User(Base):
     team: Mapped[str] = mapped_column(String(80), default="Talent Management")
     region: Mapped[str] = mapped_column(String(80), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)       # incrémenté à la déconnexion : les anciens cookies deviennent invalides
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -50,8 +51,8 @@ class MissionSource(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(40))
-    label: Mapped[str] = mapped_column(String(200), default="")
-    author: Mapped[str] = mapped_column(String(200), default="")
+    label: Mapped[str] = mapped_column(EncText, default="")
+    author: Mapped[str] = mapped_column(EncText, default="")                   # nom d'un contact client : chiffré
     source_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     text: Mapped[str] = mapped_column(EncText)
     created_by: Mapped[str] = mapped_column(String(32))
@@ -64,7 +65,7 @@ class Requirement(Base):
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     key: Mapped[str] = mapped_column(String(120), index=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
-    data: Mapped[dict[str, Any]] = mapped_column(JSON)
+    data: Mapped[dict[str, Any]] = mapped_column(EncJSON)                       # extraits du brief et nom du contact client : chiffrés
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
@@ -114,7 +115,7 @@ class Search(Base):
     modification: Mapped[str] = mapped_column(Text, default="")
     author_id: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(12), default="draft")          # draft | saved | useful
-    note: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(EncText, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -127,8 +128,8 @@ class SearchFeedback(Base):
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     false_positive_terms: Mapped[list[str]] = mapped_column(JSON, default=list)
     missing_skill: Mapped[str] = mapped_column(String(200), default="")
-    missing_note: Mapped[str] = mapped_column(Text, default="")
-    notes: Mapped[str] = mapped_column(Text, default="")
+    missing_note: Mapped[str] = mapped_column(EncText, default="")
+    notes: Mapped[str] = mapped_column(EncText, default="")
     diagnosis: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     resulting_search_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_by: Mapped[str] = mapped_column(String(32))
@@ -141,9 +142,9 @@ class Candidate(Base):
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     ref: Mapped[str] = mapped_column(String(20))
     acronym: Mapped[str] = mapped_column(String(10), default="")                # acronyme autorisé pour les dossiers (jamais le nom)
-    label: Mapped[str] = mapped_column(String(200), default="")                 # libellé interne choisi par le recruteur (pas d'identité imposée)
+    label: Mapped[str] = mapped_column(EncText, default="")                     # libellé interne (dérivé du nom de fichier) : chiffré
     status: Mapped[str] = mapped_column(String(20), default="a_evaluer")
-    status_comment: Mapped[str] = mapped_column(Text, default="")
+    status_comment: Mapped[str] = mapped_column(EncText, default="")
     status_by: Mapped[str] = mapped_column(String(32), default="")
     created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -155,7 +156,7 @@ class Document(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     candidate_id: Mapped[str | None] = mapped_column(ForeignKey("candidates.id", ondelete="SET NULL"), nullable=True, index=True)
-    filename: Mapped[str] = mapped_column(String(255))
+    filename: Mapped[str] = mapped_column(EncText)                              # un nom de fichier contient souvent le nom du candidat : chiffré
     sha256_file: Mapped[str] = mapped_column(String(64))
     sha256_text: Mapped[str] = mapped_column(String(64), default="")
     size: Mapped[int] = mapped_column(Integer, default=0)
@@ -168,10 +169,11 @@ class Document(Base):
     error_message: Mapped[str] = mapped_column(Text, default="")
     extraction_quality: Mapped[str] = mapped_column(String(10), default="")
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
-    security_flags: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    security_flags: Mapped[list[dict[str, Any]]] = mapped_column(EncJSON, default=list)     # contient des extraits du CV : chiffré
     duplicate_of: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    blob: Mapped[bytes | None] = mapped_column(EncBytes, nullable=True)
-    text: Mapped[str | None] = mapped_column(EncText, nullable=True)
+    blob: Mapped[bytes | None] = mapped_column(EncBytes, nullable=True, deferred=True)       # différés : lister les documents ne lit ni ne déchiffre les fichiers
+    text: Mapped[str | None] = mapped_column(EncText, nullable=True, deferred=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)                                # tentatives de traitement (boucle de plantage au redémarrage)
     created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -184,7 +186,7 @@ class CallNote(Base):
     candidate_id: Mapped[str | None] = mapped_column(ForeignKey("candidates.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(30))
     text: Mapped[str] = mapped_column(EncText)
-    speaker_map: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    speaker_map: Mapped[dict[str, str]] = mapped_column(EncJSON, default=dict)
     auto_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     note_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by: Mapped[str] = mapped_column(String(32))
@@ -204,7 +206,7 @@ class Evidence(Base):
     reliability: Mapped[str] = mapped_column(String(30))
     level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     excerpt: Mapped[str] = mapped_column(EncText)
-    speaker: Mapped[str] = mapped_column(String(120), default="")
+    speaker: Mapped[str] = mapped_column(EncText, default="")
     speaker_role: Mapped[str] = mapped_column(String(30), default="")
     certainty: Mapped[str] = mapped_column(String(10), default="certain")
     auto_generated: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -222,7 +224,7 @@ class EvidenceReview(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     evidence_id: Mapped[str] = mapped_column(ForeignKey("evidence.id", ondelete="CASCADE"), index=True)
     decision: Mapped[str] = mapped_column(String(12))                       # validated | rejected
-    note: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(EncText, default="")
     reviewer_id: Mapped[str] = mapped_column(String(32))
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -235,7 +237,7 @@ class Assessment(Base):
     grid_id: Mapped[str] = mapped_column(ForeignKey("grids.id"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     trigger: Mapped[str] = mapped_column(String(30))
-    reason: Mapped[str] = mapped_column(Text, default="")
+    reason: Mapped[str] = mapped_column(EncText, default="")
     result: Mapped[dict[str, Any]] = mapped_column(EncJSON)
     diff: Mapped[dict[str, Any] | None] = mapped_column(EncJSON, nullable=True)
     score_documented: Mapped[float] = mapped_column(Float)
@@ -263,8 +265,9 @@ class Proposal(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(40))
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    explanation: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(EncJSON)                    # contient un extrait de compte rendu : chiffré, effacé avec le candidat
+    explanation: Mapped[str] = mapped_column(EncText)
+    candidate_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)      # candidat dont la note a produit la proposition (sans FK : effacement ciblé)
     consequences: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(12), default="pending")      # pending | confirmed | rejected
     created_by: Mapped[str] = mapped_column(String(32))

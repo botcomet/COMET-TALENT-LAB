@@ -8,6 +8,7 @@ Principes :
 from __future__ import annotations
 
 import io
+import time
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -93,9 +94,11 @@ def _garbled(text: str) -> bool:
     return _alpha_ratio(text) < 0.55
 
 
-def _pdf(data: bytes, max_pages: int) -> tuple[list[str], list[str]]:
+def _pdf(data: bytes, max_pages: int, max_chars: int = 150_000, deadline: float | None = None) -> tuple[list[str], list[str]]:
     from pypdf import PdfReader
+    from pypdf import filters as _pf
     from pypdf.errors import PdfReadError
+    _pf.ZLIB_MAX_OUTPUT_LENGTH = min(getattr(_pf, "ZLIB_MAX_OUTPUT_LENGTH", 8_000_000), 8_000_000)      # un flux de page ne décompresse pas en centaines de Mo
     warnings: list[str] = []
     try:
         reader = PdfReader(io.BytesIO(data), strict=False)
@@ -114,12 +117,18 @@ def _pdf(data: bytes, max_pages: int) -> tuple[list[str], list[str]]:
     if n > max_pages:
         raise ExtractionError("too_many_pages", f"Le document compte {n} pages (maximum {max_pages}) : probablement pas un CV.")
     pages: list[str] = []
+    total = 0
     for i, page in enumerate(reader.pages, start=1):
+        if deadline is not None and time.monotonic() > deadline:
+            raise ExtractionError("timeout", "L'extraction du PDF a dépassé le temps autorisé : document anormal (contenu démesuré).")
         try:
             pages.append(page.extract_text() or "")
         except Exception:  # noqa: BLE001
             pages.append("")
             warnings.append(f"Page {i} illisible : son contenu est ignoré.")
+        total += len(pages[-1])
+        if total > max_chars:
+            raise ExtractionError("too_long", f"Le texte extrait dépasse {max_chars} caractères : probablement pas un CV.")
     if sum(len(p.strip()) for p in pages) < 40:     # essai de repli avec un autre extracteur
         try:
             import pdfplumber
@@ -132,7 +141,32 @@ def _pdf(data: bytes, max_pages: int) -> tuple[list[str], list[str]]:
     return pages, warnings
 
 
+MAX_DOCX_PART_BYTES = 6 * 1024 * 1024        # un document.xml de CV fait quelques centaines de Ko
+MAX_DOCX_TOTAL_BYTES = 40 * 1024 * 1024
+MAX_DOCX_RATIO = 250                         # rapport décompressé / compressé : au-delà, c'est une bombe, pas un CV
+
+
+def _check_docx_archive(data: bytes) -> None:
+    """Un DOCX est une archive ZIP : on borne la taille DÉCOMPRESSÉE avant que quoi que ce soit ne soit décompressé en mémoire."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        infos = z.infolist()
+    except Exception as e:  # noqa: BLE001
+        raise ExtractionError("corrupt", "Archive Word corrompue.") from e
+    if len(infos) > 2000:
+        raise ExtractionError("too_large", "Archive Word anormale (trop d'éléments).")
+    total = 0
+    for i in infos:
+        total += i.file_size
+        limit = MAX_DOCX_PART_BYTES if i.filename.lower().endswith((".xml", ".rels")) else MAX_DOCX_TOTAL_BYTES
+        if i.file_size > limit:
+            raise ExtractionError("too_large", "Document Word anormalement volumineux une fois décompressé : probablement pas un CV.")
+    if total > MAX_DOCX_TOTAL_BYTES or (len(data) and total / len(data) > MAX_DOCX_RATIO):
+        raise ExtractionError("too_large", "Document Word anormalement volumineux une fois décompressé : probablement pas un CV.")
+
+
 def _docx(data: bytes) -> list[str]:
+    _check_docx_archive(data)
     try:
         import docx
         d = docx.Document(io.BytesIO(data))
@@ -160,7 +194,7 @@ def extract_text(data: bytes, filename: str = "", *, max_bytes: int = MAX_BYTES_
     warnings: list[str] = []
     mime = {"pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "txt": "text/plain"}[kind]
     if kind == "pdf":
-        pages, warnings = _pdf(data, max_pages)
+        pages, warnings = _pdf(data, max_pages, max_chars)
     elif kind == "docx":
         pages = _docx(data)
     else:

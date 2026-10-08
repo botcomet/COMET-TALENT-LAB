@@ -82,3 +82,42 @@ def make_image_only_pdf() -> bytes:
     c.rect(50, 50, 300, 300, fill=1)       # aucune couche de texte
     c.save()
     return buf.getvalue()
+
+
+def make_heavy_pdf(pages: int = 40, ops: int = 60_000) -> bytes:
+    """PDF valide mais coûteux à lire : un flux compressé de ``ops`` opérateurs « (a) Tj » partagé par ``pages`` pages (petit fichier, énorme travail)."""
+    import zlib
+    content = zlib.compress(b"BT /F1 9 Tf 10 700 Td " + b"(a) Tj " * ops + b"ET")
+    objs: list[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>"]
+    kids = " ".join(f"{5 + i} 0 R" for i in range(pages))
+    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {pages} >>".encode())
+    objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    objs.append(b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(content) + content + b"\nendstream")
+    for _ in range(pages):
+        objs.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+    out = bytearray(b"%PDF-1.4\n")
+    offs = []
+    for i, o in enumerate(objs, start=1):
+        offs.append(len(out))
+        out += f"{i} 0 obj\n".encode() + o + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    for o in offs:
+        out += f"{o:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode()
+    return bytes(out)
+
+
+def make_docx_bomb(uncompressed_mb: int = 20) -> bytes:
+    """DOCX valide de quelques dizaines de Ko dont document.xml fait ``uncompressed_mb`` Mo une fois décompressé."""
+    import io
+    import zipfile
+    para = b"<w:p><w:r><w:t>Developpeur Java Kafka Spring Boot experience</w:t></w:r></w:p>"
+    xml = (b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+           + para * (uncompressed_mb * 1024 * 1024 // len(para)) + b"</w:body></w:document>")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        z.writestr("word/document.xml", xml)
+    return buf.getvalue()

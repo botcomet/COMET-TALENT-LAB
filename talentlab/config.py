@@ -10,7 +10,7 @@ import secrets
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     max_chars: int = 150_000
     analysis_timeout_s: int = 60                       # budget de temps par document (contenu anormal → échec explicite, jamais un blocage)
     processing_mode: str = "background"                # background | inline (tests)
-    worker_threads: int = 4
+    worker_threads_per_user: int = 2                   # un petit pool par utilisateur : l'un ne bloque pas les autres
+    extraction_timeout_s: int = 30                     # extraction PDF/DOCX dans un processus isolé, tué au-delà
+    extraction_memory_mb: int = 1536
 
     # --- plateforme de sourcing (§5.2) — paramètres de départ, non universels
     platform: str = "turnover"
@@ -58,6 +60,17 @@ class Settings(BaseSettings):
     llm_provider: str = "none"                         # none | anthropic
     llm_api_key: str = ""
     llm_model: str = ""
+
+    @field_validator("env", mode="before")
+    @classmethod
+    def _env(cls, v: str) -> str:
+        """Environnement normalisé (casse, espaces, alias « production ») et FERMÉ : une valeur inconnue (« staging », « prd2 »…) est refusée au démarrage
+        au lieu de retomber silencieusement sur un mode permissif."""
+        e = str(v).strip().lower()
+        e = {"production": "prod", "prd": "prod"}.get(e, e)
+        if e not in ("dev", "test", "prod"):
+            raise ValueError(f"TALENTLAB_ENV « {v} » inconnu : valeurs admises dev, test, prod (une valeur de production non reconnue ne doit jamais activer le mode de développement).")
+        return e
 
     @model_validator(mode="after")
     def _guard(self) -> "Settings":
