@@ -344,7 +344,14 @@ def list_candidates(view: str = Query("all", pattern="^(all|work)$"), ctx=Read, 
         if view == "work" and b["hidden_in_work_view"]:
             continue
         out.append(b)
-    out.sort(key=lambda b: -(b.get("assessment") or {}).get("score_documented", -1))
+    from ..domain.scoring import rank_key
+    def key(b):
+        a = b.get("assessment")
+        if not a:
+            return (1, 0, 0, 0, 0)               # sans évaluation : en fin de liste
+        contra = 1 if a["tier"] == "ecart_majeur" else 0
+        return (0, *rank_key(a["open_mandatory"], contra, a["score_documented"], a["score_potential"]))
+    out.sort(key=key)
     return out
 
 

@@ -675,14 +675,18 @@ def merge_external(ev: CritEvidence, ext: list[ExtEvidence], label: str, *, kind
                                        "resolution": f"Niveau ramené à « {cap.value.replace('_', ' ')} » par le recruteur."})
                 level = cap
         elif e.kind == EvidenceKind.CONTRADICTS:
-            reliable = e.validated or not e.auto_generated
-            items.append(EvItem("call", e.excerpt, 0, 0, "call", Level.CONTRADICTED, reliability=Reliability.CONTRADICTION, note="contredit : " + loc_note, evidence_id=e.id, validated=e.validated))
-            contradictions.append({"type": "contradiction", "cv_level": ev.level.value, "evidence_id": e.id, "statement": e.excerpt,
-                                   "resolution": "Niveau « contredit »" if reliable else "Contradiction issue d'une transcription non validée : à confirmer"})
+            # « contredit » déclenche un plafond et une alerte bloquante : il exige un humain. Une absence EXTRAITE d'une note ou d'une transcription
+            # est une interprétation (négations, tiers, composantes) : tant qu'un recruteur ne l'a pas validée, elle plafonne à « déclaré » et demande confirmation.
+            reliable = e.validated or e.source == EvidenceSource.RECRUITER_INPUT
+            items.append(EvItem("call", e.excerpt, 0, 0, "call", Level.CONTRADICTED if reliable else Level.DECLARED, reliability=Reliability.CONTRADICTION,
+                                note=("contredit : " if reliable else "absence déclarée à confirmer : ") + loc_note, evidence_id=e.id, validated=e.validated))
+            contradictions.append({"type": "contradiction" if reliable else "contradiction_a_confirmer", "cv_level": ev.level.value, "evidence_id": e.id, "statement": e.excerpt,
+                                   "resolution": "Niveau « contredit »" if reliable else "Absence déclarée dans un échange, non validée : le niveau est plafonné à « déclaré » ; "
+                                                                                     "valider l'information pour appliquer le plafond d'écart majeur, ou la rejeter si l'extraction est erronée."})
             if reliable:
                 level = Level.CONTRADICTED
             else:
-                level = min(level, Level.PARTIAL, key=lambda l: LEVEL_ORDER[l])
+                level = min(level, Level.DECLARED, key=lambda l: LEVEL_ORDER[l])
     just = ev.justification if level == ev.level else _justify(level, items[0] if items else EvItem("cv", "", 0, 0, "other", level), label, notes)
     if level != ev.level:
         just = f"Après prise en compte des échanges : {level.value.replace('_', ' ')}. " + (ev.justification or "")
@@ -698,28 +702,57 @@ _OWNERSHIP_TERMS = {"architecture", "decisionnaire", "design authority"}
 
 
 # ----------------------------------------------------------------- volumétrie (distinguer la volumétrie Kafka de la volumétrie bancaire)
-_NUM = r"(\d+(?:[\s.]\d{3})*(?:[.,]\d+)?)"
-_VOL = re.compile(rf"{_NUM}\s*(k|m|millions?|milliards?|milliers?)?\s*(?:de\s+|d')?(?:transactions?|tx|msg|messages?|requetes?|evenements?|fichiers?|appels?|operations?)"
-                  rf"(?:\s*(?:/|par)\s*(seconde|minute|heure|jour|semaine|mois|s|h|j)\b)?", re.I)
-_PER_DAY = {"seconde": 86400, "s": 86400, "minute": 1440, "heure": 24, "h": 24, "jour": 1, "j": 1, "semaine": 1 / 7, "mois": 1 / 30}
+# nombre : groupes de milliers (« 5 000 », « 5,000 », « 5.000 ») ou entier court + décimale éventuelle ; ancré (pas de départ au milieu d'un nombre)
+_NUM = r"(?<![\d.,])(\d{1,3}(?:[ .,\u00a0]\d{3})+|\d{1,12}(?:[.,]\d{1,2})?)(?![\d])"
+_UNIT = (r"(?:transactions?|tx|tps|msgs?|messages?|requetes?|requests?|evenements?|events?|fichiers?|files|appels?|calls?|operations?|ops|"
+         r"commandes?|orders?|paiements?|payments?|enregistrements?|records?)")
+_VOL = re.compile(rf"{_NUM} ?(k|m|millions?|milliards?|milliers?|billions?)? ?(?:de |d'|of )?{_UNIT}\b"
+                  rf"(?: ?(?:/|par |per |a l'|each |by )? ?(seconde|second|sec|minute|min|heure|hour|jour|day|semaine|week|mois|month|an|annee|year|s|h|j|d)\b)?", re.I)
+_PER_DAY = {"seconde": 86400, "second": 86400, "sec": 86400, "s": 86400, "minute": 1440, "min": 1440, "heure": 24, "hour": 24, "h": 24, "jour": 1, "day": 1, "j": 1, "d": 1,
+            "semaine": 1 / 7, "week": 1 / 7, "mois": 1 / 30, "month": 1 / 30, "an": 1 / 365, "annee": 1 / 365, "year": 1 / 365}
+_MULT = {"k": 1e3, "m": 1e6, "million": 1e6, "millions": 1e6, "milliard": 1e9, "milliards": 1e9, "billion": 1e9, "billions": 1e9, "millier": 1e3, "milliers": 1e3}
+_RATE_UNIT = re.compile(r"^(?:tps)$", re.I)
+
+
+def _to_number(raw: str) -> float | None:
+    t = raw.replace("\u00a0", " ")
+    if re.fullmatch(r"\d{1,3}(?:[ .,]\d{3})+", t):
+        t = re.sub(r"[ .,]", "", t)                       # séparateurs de milliers
+    else:
+        t = t.replace(",", ".")
+    try:
+        return float(t)
+    except ValueError:
+        return None
 
 
 def volume_per_day(text: str) -> float | None:
-    """Plus grand débit chiffré trouvé, ramené par jour ; None si rien de chiffré."""
+    """Plus grand débit chiffré trouvé, ramené par jour ; None si rien de chiffré AVEC UNE DURÉE.
+
+    Un volume sans durée (« 120 000 messages ») est un total, pas un débit : il n'établit aucune volumétrie. Un débit « par an » vaut 1/365 par jour."""
     best: float | None = None
-    f = fold(text)
-    if re.search(r"plusieurs\s+millions?\s+(?:de\s+)?(?:transactions?|messages?|requetes?|evenements?|operations?)(?:\s+(?:par|/)\s+jour)?", f):
+    f = re.sub(r"\s+", " ", fold(text))               # espaces multiples : jamais de retour arrière quadratique
+    if re.search(r"plusieurs\s+millions?\s+(?:de\s+)?(?:transactions?|messages?|requetes?|evenements?|operations?)\s+(?:par|/)\s+jour", f):
         best = 2e6
     for m in _VOL.finditer(f):
-        try:
-            n = float(m.group(1).replace(" ", "").replace(",", ".").replace(".", "", m.group(1).count(".") - 1 if m.group(1).count(".") > 1 else 0))
-        except ValueError:
+        n = _to_number(m.group(1))
+        if n is None:
             continue
-        mult = {"k": 1e3, "m": 1e6, "million": 1e6, "millions": 1e6, "milliard": 1e9, "milliards": 1e9, "millier": 1e3, "milliers": 1e3}.get((m.group(2) or "").lower(), 1)
-        per = _PER_DAY.get((m.group(3) or "jour").lower(), 1)
-        v = n * mult * per
+        per_key = (m.group(3) or "").lower()
+        if per_key:
+            per = _PER_DAY.get(per_key)
+        elif re.search(r"\btps\b", m.group(0)):
+            per = 86400                                   # « 5 000 tps » = par seconde
+        else:
+            per = None
+        if per is None:
+            continue
+        v = n * _MULT.get((m.group(2) or "").lower(), 1) * per
         best = v if best is None else max(best, v)
     return best
+
+
+_VOL_SPLIT = re.compile(r"(?<=[.!?]) |(?<= )(?:qui|dont|which|that|where|ou) ")
 
 
 MEDIUM_VOLUME_PER_DAY = 10_000
@@ -738,12 +771,26 @@ def _evaluate_volume(parsed: ParsedCV, label: str, scope_terms: list[str], cfg: 
     for a, b, exp in zones:
         for ia, ib in _items(text, a, b):
             chunk = text[ia:ib]
-            vol = volume_per_day(chunk)
-            if vol is None:
+            flat_chunk = re.sub(r"\s+", " ", cl.flatten(chunk))
+            # une volumétrie appartient à la proposition qui la porte : « flux Kafka (50 messages par jour) … SI bancaire qui traite des millions de transactions »
+            # n'attribue pas les millions de la relative à Kafka
+            segs, pos0 = [], 0
+            for sm in list(_VOL_SPLIT.finditer(fold(flat_chunk))) + [None]:
+                e0 = sm.start() if sm else len(flat_chunk)
+                segs.append(flat_chunk[pos0:e0])
+                pos0 = sm.end() if sm else e0
+            vols = [(v, sg) for sg in segs if (v := volume_per_day(sg)) is not None]
+            if not vols:
                 continue
-            if scope_terms and not any(re.search(term_pattern(t), fold(chunk)) for t in scope_terms):
-                out_of_scope.append((vol, chunk))
-                continue
+            if scope_terms:
+                in_scope = [(v, sg) for v, sg in vols if any(re.search(term_pattern(t), fold(sg)) for t in scope_terms)]
+                for v, sg in vols:
+                    if (v, sg) not in in_scope:
+                        out_of_scope.append((v, chunk))
+                if not in_scope:
+                    continue
+                vols = in_scope
+            vol = max(v for v, _sg in vols)
             lvl = Level.CONFIRMED if vol >= HIGH_VOLUME_PER_DAY else (Level.PARTIAL if vol >= MEDIUM_VOLUME_PER_DAY else Level.DECLARED)
             note = (f"débit chiffré ≈ {vol:,.0f} opérations/jour".replace(",", " ")
                     + (" (≥ seuil de forte volumétrie)" if lvl == Level.CONFIRMED else (" (volumétrie moyenne)" if lvl == Level.PARTIAL else " : volumétrie FAIBLE, ne démontre pas une forte volumétrie")))

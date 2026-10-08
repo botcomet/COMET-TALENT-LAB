@@ -380,6 +380,18 @@ def _summary(shown: int, potential: float, tier: Tier, covered: list[str], parti
 
 
 # ----------------------------------------------------------------- comparaison & différences
+def rank_key(open_mandatory: list[str], contradicted_mandatory: int, score_documented: float, score_potential: float) -> tuple:
+    """Ordre de présentation : les impératifs ne se compensent pas. On classe d'abord par impératifs contredits, puis par impératifs non confirmés,
+    et SEULEMENT ENSUITE par score documenté (puis par potentiel). Un candidat à 73 dont un impératif n'est pas documenté ne précède donc pas
+    un candidat à 57 dont tous les impératifs sont confirmés : le premier doit d'abord être qualifié, le second peut être présenté."""
+    return (contradicted_mandatory, len(open_mandatory), -float(score_documented), -float(score_potential))
+
+
+def rank_key_of(result: dict[str, Any], score_documented: float, score_potential: float) -> tuple:
+    contra = sum(1 for c in result.get("criteria", []) if c.get("mandatory") and c.get("level") == Level.CONTRADICTED.value)
+    return rank_key(result.get("open_mandatory", []), contra, score_documented, score_potential)
+
+
 def compare(assessments: dict[str, Assessment]) -> dict[str, Any]:
     """Comparaison de candidats sur une grille IDENTIQUE (refuse de comparer des grilles différentes)."""
     hashes = {a.grid_hash for a in assessments.values()}
@@ -399,7 +411,7 @@ def compare(assessments: dict[str, Assessment]) -> dict[str, Any]:
         pts = [row["cells"][n]["points"] for n in names]
         row["spread"] = round(max(pts) - min(pts), 2)
         rows.append(row)
-    ranking = sorted(names, key=lambda n: -assessments[n].score_documented)
+    ranking = sorted(names, key=lambda n: rank_key_of(assessments[n].to_dict(), assessments[n].score_documented, assessments[n].score_potential))
     reasons = {}
     if len(ranking) >= 2:
         a, b = ranking[0], ranking[1]

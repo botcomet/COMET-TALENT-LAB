@@ -111,11 +111,21 @@ def test_business_4_imperative_missing_cannot_be_compensated_by_related_skills()
 @pytest.mark.business
 def test_business_4b_explicit_absence_applies_validated_cap_and_major_gap():
     grid, _ = frozen_grid(B.WMS_TITLE, B.WMS)
-    ext = {"skill:reflex_wms": [_ext("skill:reflex_wms", EvidenceKind.CONTRADICTS, "Je n'ai jamais travaillé sur Reflex, uniquement AS400.")]}
+    ext = {"skill:reflex_wms": [_ext("skill:reflex_wms", EvidenceKind.CONTRADICTS, "Je n'ai jamais travaillé sur Reflex, uniquement AS400.", validated=True)]}
     a = score(grid, C.CV_WMS_NOREFLEX, ext)
     assert crit(a, "reflex_wms").level == Level.CONTRADICTED.value
     assert a.tier == Tier.MAJOR_GAP.value and a.score_documented <= grid.caps["contradicted_imperative"]
     assert a.caps_applied and any(al["severity"] == "bloquant" for al in a.alerts)
+
+
+def test_absence_extracted_from_a_note_caps_nothing_until_a_recruiter_validates_it():
+    """Une absence INTERPRÉTÉE par le moteur (négation, tiers, composante) ne déclenche ni plafond ni alerte bloquante avant validation humaine."""
+    grid, _ = frozen_grid(B.WMS_TITLE, B.WMS)
+    ext = {"skill:reflex_wms": [_ext("skill:reflex_wms", EvidenceKind.CONTRADICTS, "Je n'ai jamais travaillé sur Reflex, uniquement AS400.", validated=False)]}
+    a = score(grid, C.CV_WMS_NOREFLEX, ext)
+    c = crit(a, "reflex_wms")
+    assert c.level != Level.CONTRADICTED.value and c.contradictions[0]["type"] == "contradiction_a_confirmer"
+    assert not a.caps_applied and not any(al["severity"] == "bloquant" for al in a.alerts)
 
 
 def test_not_documented_is_never_confused_with_contradicted():

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     max_file_mb: int = 10
     max_pages: int = 40
     min_chars: int = 250
+    max_chars: int = 150_000
     processing_mode: str = "background"                # background | inline (tests)
     worker_threads: int = 4
 

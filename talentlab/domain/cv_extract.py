@@ -19,6 +19,7 @@ from .text import fold, normalize_text
 MAX_BYTES_DEFAULT = 10 * 1024 * 1024
 MAX_PAGES_DEFAULT = 40
 MIN_CHARS_DEFAULT = 250
+MAX_CHARS_DEFAULT = 150_000          # un CV de 40 pages ≈ 120 000 caractères ; au-delà, ce n'est pas un CV (et le temps d'analyse doit rester borné)
 
 
 class ExtractionError(Exception):
@@ -145,7 +146,7 @@ def _docx(data: bytes) -> list[str]:
 
 
 def extract_text(data: bytes, filename: str = "", *, max_bytes: int = MAX_BYTES_DEFAULT, max_pages: int = MAX_PAGES_DEFAULT,
-                 min_chars: int = MIN_CHARS_DEFAULT) -> Extraction:
+                 min_chars: int = MIN_CHARS_DEFAULT, max_chars: int = MAX_CHARS_DEFAULT) -> Extraction:
     if not data:
         raise ExtractionError("empty", "Le fichier est vide.")
     if len(data) > max_bytes:
@@ -173,6 +174,8 @@ def extract_text(data: bytes, filename: str = "", *, max_bytes: int = MAX_BYTES_
         raise ExtractionError("no_text_layer", "Aucun texte exploitable : PDF probablement scanné (image). L'OCR n'est pas disponible en V1 : importer une version textuelle.")
     if _garbled("\n".join(cleaned)):
         raise ExtractionError("garbled", "Le texte extrait est illisible (polices mal encodées ou caractères corrompus) : aucun score ne peut être calculé de façon fiable.")
+    if total > max_chars:
+        raise ExtractionError("too_long", f"Le texte extrait compte {total} caractères (maximum {max_chars}) : probablement pas un CV.")
     if total < min_chars:
         raise ExtractionError("insufficient_content", f"Contenu insuffisant ({total} caractères) pour une analyse fiable d'un CV.")
     quality = "ok"
@@ -201,8 +204,8 @@ _MONTHS = {
     "nov": 11, "novembre": 11, "november": 11, "dec": 12, "decembre": 12, "december": 12,
 }
 _MON = "|".join(sorted(_MONTHS, key=len, reverse=True))
-_DATE = rf"(?:(?:(?:{_MON})\.?\s+)?\d{{4}}|\d{{1,2}}\s*/\s*\d{{4}})"
-_END = rf"(?:{_DATE}|present|aujourd'?hui|actuel(?:lement)?|ce jour|en cours|current|now|date)"
+_DATE = rf"(?:\d{{1,2}}\s*[/.]\s*\d{{4}}|\d{{4}}\s*/\s*\d{{1,2}}(?!\d)|(?:(?:{_MON})\.?\s+)?\d{{4}})"
+_END = rf"(?:{_DATE}|present|aujourd'?hui|actuel(?:lement)?|ce jour|en cours|current|now|date|maintenant|today|ongoing)"
 _RANGE = re.compile(rf"(?P<s>{_DATE})\s*(?:-|–|—|a|au|to|jusqu'?a|->|→)\s*(?P<e>{_END})", re.I)
 _RANGE_SINCE = re.compile(rf"(?:depuis|since|from)\s+(?P<s>{_DATE})", re.I)
 
@@ -221,16 +224,33 @@ class YM:
 
 def _parse_ym(tok: str) -> YM | None:
     t = fold(tok).strip()
-    if m := re.fullmatch(r"(\d{1,2})\s*/\s*(\d{4})", t):
+    if m := re.fullmatch(r"(\d{1,2})\s*[/.]\s*(\d{4})", t):
         mo = int(m.group(1))
         return YM(int(m.group(2)), mo if 1 <= mo <= 12 else None)
+    if m := re.fullmatch(r"(\d{4})\s*/\s*(\d{1,2})", t):
+        mo = int(m.group(2))
+        return YM(int(m.group(1)), mo if 1 <= mo <= 12 else None)
     if m := re.fullmatch(rf"(?:({_MON})\.?\s+)?(\d{{4}})", t):
         return YM(int(m.group(2)), _MONTHS.get(m.group(1)) if m.group(1) else None)
     return None
 
 
 def _is_open(tok: str) -> bool:
-    return bool(re.fullmatch(r"present|aujourd'?hui|actuel(?:lement)?|ce jour|en cours|current|now|date", fold(tok).strip()))
+    return bool(re.fullmatch(r"present|aujourd'?hui|actuel(?:lement)?|ce jour|en cours|current|now|date|maintenant|today|ongoing", fold(tok).strip()))
+
+
+_QUANTITY_AFTER = re.compile(r"\s*(?:k\b|m\b|%|€|\$|euros?|eur\b|messages?|msgs?|transactions?|requetes?|requests?|utilisateurs?|users?|jours?|mois|ans?\b|tps|ko\b|mo\b|go\b|to\b|lignes?|brokers?|topics?|serveurs?)", re.I)
+MIN_PLAUSIBLE_YEAR = 1960
+
+
+def plausible_range(start_tok: str, end_tok: str, line_after: str, today: date) -> bool:
+    """Une plage de dates d'expérience : années dans [1960 ; année courante + 1], jamais une quantité (« 5000 - 8000 messages », « 1500 - 2000 euros »)."""
+    sy, ey = _parse_ym(start_tok), (None if _is_open(end_tok) else _parse_ym(end_tok))
+    if sy is None or not (MIN_PLAUSIBLE_YEAR <= sy.year <= today.year + 1):
+        return False
+    if ey is not None and not (MIN_PLAUSIBLE_YEAR <= ey.year <= today.year + 1):
+        return False
+    return not _QUANTITY_AFTER.match(line_after)
 
 
 # ----------------------------------------------------------------- structure
@@ -360,19 +380,35 @@ def parse_cv(text: str, *, today: date | None = None, extraction_quality: str = 
     zones = sections.get("experience") or [(0, len(text))]
     skip = [s for n in ("skills", "education", "languages", "certifications", "interests") for s in sections.get(n, [])]
     cand: list[tuple[int, int, str, str, str | None]] = []   # (line_start, line_end, raw, s_tok, e_tok)
+    flags: list[str] = []
     for a, b, raw in lines:
         if not any(z0 <= a < z1 for z0, z1 in zones):
             continue
         if any(s0 <= a < s1 for s0, s1 in skip):
             continue
         f = fold(raw)
-        m = _RANGE.search(f)
+        m = next((mm for mm in _RANGE.finditer(f) if plausible_range(mm.group("s"), mm.group("e"), f[mm.end():mm.end() + 24], today)), None)
+        if m is None and _RANGE.search(f) and len(raw) <= 160:
+            first = _RANGE.search(f)
+            if (re.search(r"\b(?:19|20)\d{2}\b", first.group(0)) and not _QUANTITY_AFTER.match(f[first.end():first.end() + 24])):
+                flags.append(f"Plage de dates invraisemblable ignorée : « {raw.strip()[:70]} » (années hors de {MIN_PLAUSIBLE_YEAR}–{today.year + 1}).")
         if m and len(raw) <= 160:
             cand.append((a, b, raw, m.group("s"), m.group("e")))
-        elif (ms := _RANGE_SINCE.search(f)) and len(raw) <= 160:
+        elif (ms := _RANGE_SINCE.search(f)) and len(raw) <= 160 and plausible_range(ms.group("s"), "present", "", today):
             cand.append((a, b, raw, ms.group("s"), "present"))
+    if cand:
+        kept: list[tuple[int, int, str, str, str | None]] = []
+        last: tuple[int, int] | None = None
+        for c in cand:
+            sy_, ey_ = _parse_ym(c[3]), (None if _is_open(c[4] or "") else _parse_ym(c[4] or ""))
+            rng = (sy_.ordinal(1), (today.year * 12 + today.month - 1) if _is_open(c[4] or "") else (ey_.ordinal(12) if ey_ else -1)) if sy_ else None
+            if (last and rng and re.match(r"^\s*[-•*·▪►→]", c[2]) and rng[0] >= last[0] and 0 <= rng[1] <= last[1]):
+                continue                          # « - Migration (2019 - 2020) » dans une expérience 2018-2022 : période de projet
+            kept.append(c)
+            if rng and rng[1] >= 0 and not re.match(r"^\s*[-•*·▪►→]", c[2]):
+                last = rng
+        cand = kept
     exps: list[Experience] = []
-    flags: list[str] = []
     idx_of = {a: i for i, (a, _b, _r) in enumerate(lines)}
     for k, (a, b, raw, s_tok, e_tok) in enumerate(cand):
         i = idx_of[a]

@@ -112,7 +112,7 @@ def process_document(doc_id: str, user_id: str) -> None:
                 return
             _stage(db, d, "processing", 10, "lecture du document")
             try:
-                ex = extract_text(d.blob or b"", d.filename, max_bytes=s.max_file_mb * 1024 * 1024, max_pages=s.max_pages, min_chars=s.min_chars)
+                ex = extract_text(d.blob or b"", d.filename, max_bytes=s.max_file_mb * 1024 * 1024, max_pages=s.max_pages, min_chars=s.min_chars, max_chars=s.max_chars)
             except ExtractionError as e:
                 d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec de l'extraction", e.code, e.message
                 audit.log(db, user_id, "cv.failed", "document", d.id, m.id, code=e.code)
@@ -372,7 +372,8 @@ def compare(db: Session, m: Mission, candidate_ids: list[str]) -> dict[str, Any]
         pts = [row["cells"][n]["points"] for n in names]
         row["spread"] = round(max(pts) - min(pts), 2)
         rows.append(row)
-    ranking = sorted(names, key=lambda n: -asms[n].score_documented)
+    from ..domain.scoring import rank_key_of
+    ranking = sorted(names, key=lambda n: rank_key_of(asms[n].result, asms[n].score_documented, asms[n].score_potential))
     why = {}
     if len(ranking) >= 2:
         a, b = ranking[0], ranking[1]

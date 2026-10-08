@@ -143,3 +143,202 @@ def test_required_java_version_is_not_matched_by_a_far_older_version_only(grids)
     a, b = score(grids["TLJ"], old), score(grids["TLJ"], new)
     assert ORDER[crit(a, "java").level] <= ORDER[PA] and any("Version exigée" in n for n in crit(a, "java").notes)
     assert ORDER[crit(b, "java").level] >= ORDER[PA] and not any("Version exigée" in n for n in crit(b, "java").notes)
+
+
+# ================================================================ C5 : faits d'appel — fausses contradictions, limites perdues, exigence client prise pour une compétence
+from talentlab.domain.call_facts import extract_facts
+from talentlab.domain.enums import EvidenceKind
+
+
+def _kinds(text, topic="skill:kafka", kind="candidate_call_note"):
+    return [f.evidence_kind for f in extract_facts(text, kind) if f.kind == "candidate_experience" and f.topic_key == topic]
+
+
+@pytest.mark.parametrize("note", [
+    "Je n'ai jamais eu de problème avec Kafka en production.",
+    "Je n'ai pas eu de difficulté à déployer Kafka.",
+    "Je n'ai jamais rencontré d'incident majeur sur Kafka.",
+])
+def test_a_negated_problem_is_good_news_never_a_contradiction(note):
+    ks = _kinds(note)
+    assert ks and EvidenceKind.CONTRADICTS not in ks and EvidenceKind.LIMITS not in ks
+
+
+@pytest.mark.parametrize("note", [
+    "Je n'ai jamais administré le cluster Kafka, j'étais développeur sur les producers.",
+    "Je n'ai jamais utilisé Kafka Connect ni Avro, uniquement des producers et consumers Kafka.",
+])
+def test_negating_a_component_of_a_technology_limits_it_but_never_contradicts_it(note):
+    ks = _kinds(note)
+    assert ks and EvidenceKind.CONTRADICTS not in ks
+
+
+def test_a_negated_component_next_to_an_affirmed_technology_does_not_cancel_it():
+    ks = _kinds("Je n'ai pas travaillé sur Kafka Streams, mais sur Kafka oui, 6 brokers.")
+    assert ks == [EvidenceKind.SUPPORTS]
+
+
+def test_direct_absence_is_extracted_as_a_contradiction_that_still_needs_human_validation(grids):
+    assert _kinds("Je n'ai jamais utilisé Kafka.") == [EvidenceKind.CONTRADICTS]
+    # le plafond « écart majeur » n'est jamais appliqué sur une interprétation non validée (voir test_matching_business)
+
+
+@pytest.mark.parametrize("note", [
+    "I only used Kafka on two topics.",
+    "Mon expérience Kafka se limite à deux topics.",
+    "Je n'ai fait de Kafka que sur 2 topics, rien de plus.",
+    "Kafka : uniquement 2 topics, jamais de cluster.",
+    "J'ai juste touché à Kafka sur un petit projet.",
+])
+def test_limits_are_recognised_in_many_formulations_fr_and_en(note):
+    assert EvidenceKind.LIMITS in _kinds(note)
+
+
+def test_field_labels_are_not_speakers():
+    fs = extract_facts("TJM : 650 € / Disponibilité : immédiate", "candidate_call_note")
+    got = {(f.constraint["field"], f.constraint["value"]) for f in fs if f.kind == "candidate_constraint"}
+    assert ("tjm", 650) in got and ("availability", "immediate") in got
+    fs = extract_facts("Kafka : uniquement 2 topics, jamais de cluster.", "candidate_call_note")
+    assert any(f.kind == "candidate_experience" and f.evidence_kind == EvidenceKind.LIMITS for f in fs), "« Kafka » n'est pas un locuteur"
+
+
+@pytest.mark.parametrize("note,kind", [
+    ("Client veut Kafka Connect et Avro (indispensable).", "candidate_call_note"),
+    ("Speaker 1 : Le client veut absolument Kafka Connect", "transcript"),
+    ("Le client exige Kafka Connect, c'est obligatoire.", "candidate_call_note"),
+])
+def test_an_unlabelled_client_requirement_is_never_a_candidate_skill(note, kind):
+    fs = extract_facts(note, kind)
+    assert any(f.kind == "client_requirement" for f in fs)
+    assert not any(f.kind == "candidate_experience" for f in fs), [f.to_dict() for f in fs if f.kind == "candidate_experience"]
+
+
+# ================================================================ E1 : les impératifs ne se compensent pas, y compris dans le classement
+def test_ranking_puts_confirmed_imperatives_before_a_higher_score_with_an_open_imperative(grids):
+    from talentlab.domain.scoring import compare
+    a_cv = C.CV_TLJ_B.replace("Kafka Connect", "RabbitMQ").replace("Kafka", "RabbitMQ").replace("Avro", "JSON")      # tout, sauf Kafka (impératif)
+    b_cv = ("Dev Fictif\nDéveloppeur Java\n\nEXPÉRIENCES\n\nBoite Exemple — Développeur Java (Mars 2019 – en cours)\n"
+            "- Conception et développement de services Java 17 et Spring Boot ; mise en place d'un cluster Kafka de 6 brokers, conception de topics et partitions, 40 000 messages par seconde.\n"
+            "Environnement technique : Java 17, Spring Boot, Kafka\n")
+    a, b = score(grids["TLJ"], a_cv), score(grids["TLJ"], b_cv)
+    assert a.score_documented > b.score_documented and a.open_mandatory and not b.open_mandatory, "précondition : A score plus haut mais a un impératif ouvert"
+    assert compare({"A": a, "B": b})["ranking"] == ["B", "A"]
+    assert compare({"A": a, "B": b})["ranking"] == compare({"B": b, "A": a})["ranking"], "indépendant de l'ordre d'entrée"
+
+
+# ================================================================ E6 : volumétrie — portée, durée, unités
+@pytest.fixture(scope="module")
+def vol_grids():
+    from talentlab.domain.enums import Category
+
+    def scoped(rs):
+        for r in rs:
+            if r.key == "domain:high_volume":
+                r.category, r.scope_terms = Category.IMPERATIF, ["kafka"]
+
+    def unscoped(rs):
+        for r in rs:
+            if r.key == "domain:high_volume":
+                r.category = Category.IMPERATIF
+    return frozen_grid(B.TLJ_TITLE, B.TLJ, scoped)[0], frozen_grid(B.TLJ_TITLE, B.TLJ, unscoped)[0]
+
+
+@pytest.mark.parametrize("bullet,maxlvl", [
+    ("- Intégration d'un flux Kafka (50 messages par jour) au SI bancaire qui traite plusieurs millions de transactions par jour.", DE),
+    ("- Mise en place de Kafka : 120 000 messages.", DE),                                     # un total, pas un débit
+    ("- Mise en place de Kafka avec 30 millions de transactions par an.", PA),                # ≈ 82 000 / jour : moyenne, pas forte
+])
+def test_volume_is_attributed_to_its_own_clause_and_needs_a_duration(vol_grids, bullet, maxlvl):
+    got = crit(score(vol_grids[0], HDR + bullet), "high_volume").level
+    assert ORDER[got] <= ORDER[maxlvl], f"{bullet} → {got}"
+
+
+@pytest.mark.parametrize("bullet", [
+    "- Mise en place de Kafka : 5,000 transactions per second.",
+    "- Mise en place de Kafka : 10 000 requests per minute.",
+    "- Mise en place de Kafka : débit soutenu de 40 000 messages par seconde.",
+])
+def test_real_high_throughput_in_english_and_french_formats_is_still_recognised(vol_grids, bullet):
+    assert crit(score(vol_grids[0], HDR + bullet), "high_volume").level == CO
+
+
+def test_a_very_long_digit_string_does_not_stall_the_analysis(vol_grids):
+    import time
+    t0 = time.perf_counter()
+    score(vol_grids[0], HDR + "- Plateforme Kafka : " + "1" * 16000 + " messages par jour.")
+    assert time.perf_counter() - t0 < 3, "complexité linéaire attendue (le temps quadratique bloquait 35 s sur 16 000 chiffres)"
+
+
+# ================================================================ M2 : un CV hostile ne bloque pas l'analyse (budget de temps par CV)
+@pytest.mark.parametrize("name,payload", [
+    ("espaces", "- Kafka" + " " * 100_000 + "Java"),
+    ("espaces + nombre", "- Kafka 5" + " " * 100_000 + "messages"),
+    ("chiffres", "- Kafka " + "1" * 16_000 + " messages par jour"),
+    ("répétition", "- " + "Kafka, " * 20_000),
+    ("mots répétés", "- " + "Développement Kafka topics partitions " * 5_000),
+    ("négations répétées", "- n'ai jamais " + "ni a " * 20_000),
+    ("ligne sans espace", "- " + "a" * 200_000),
+    ("tirets", "- Kafka " + "-" * 50_000 + " Java"),
+])
+def test_hostile_input_stays_within_a_time_budget(grids, name, payload):
+    import time
+    t0 = time.perf_counter()
+    a = score(grids["TLJ"], HDR + payload)
+    assert time.perf_counter() - t0 < 6, f"{name} : analyse trop lente"
+    assert 0 <= a.score_documented <= 100
+
+
+def test_text_beyond_the_length_limit_is_refused_with_an_explicit_reason():
+    from talentlab.domain.cv_extract import ExtractionError, extract_text
+    huge = ("Développeur Java — Kafka, Spring Boot. " * 6000).encode()
+    with pytest.raises(ExtractionError) as e:
+        extract_text(huge, "gros.txt", max_chars=100_000)
+    assert e.value.code == "too_long"
+
+
+# ================================================================ M1 : dates — plages plausibles seulement, formats courants lus
+from datetime import date as _date
+
+from talentlab.domain.cv_extract import parse_cv
+from tests.helpers import TODAY
+
+
+def _exps(body_line, header="Soc — Dév (Mars 2018 – Mars 2022)"):
+    cv = f"Dev\n\nEXPÉRIENCES\n\n{header}\n- {body_line}\nEnvironnement : Kafka\n\nAutre — Dév (Janvier 2012 – Février 2018)\n- x\n"
+    p = parse_cv(cv, today=TODAY)
+    return [(e.start, e.end) for e in p.experiences], p.flags
+
+
+@pytest.mark.parametrize("line", [
+    "Débit de 5000 - 8000 messages par seconde",
+    "Budget 1500 - 2000 euros",
+    "Migration (2019 - 2020) vers Kafka",           # période de projet dans une expérience plus large
+])
+def test_a_quantity_or_project_period_never_opens_a_phantom_experience(line):
+    exps, _ = _exps(line)
+    assert exps == [("2018-03", "2022-03"), ("2012-01", "2018-02")]
+
+
+def test_implausible_year_ranges_are_ignored_and_reported_not_computed():
+    exps, flags = _exps("Janvier 2030 – Décembre 2038")
+    assert exps == [("2018-03", "2022-03"), ("2012-01", "2018-02")] and any("invraisemblable" in f for f in flags)
+    p = parse_cv("Dev\n\nEXPÉRIENCES\n\nSoc — Dév (1990 – 2095)\n- travail\n", today=TODAY)
+    assert p.computed_years is None and any("invraisemblable" in f for f in p.flags)
+
+
+@pytest.mark.parametrize("header,start,end,current", [
+    ("Soc — Dév (03.2019 – 05.2021)", "2019-03", "2021-05", False),
+    ("Soc — Dév (2019/03 – 2021/05)", "2019-03", "2021-05", False),
+    ("Soc — Dév (mars 2019 – maintenant)", "2019-03", None, True),
+    ("Soc — Dév (Mars 2019 – en cours)", "2019-03", None, True),
+])
+def test_common_date_formats_are_read(header, start, end, current):
+    p = parse_cv(f"Dev\n\nEXPÉRIENCES\n\n{header}\n- travail\n", today=TODAY)
+    e = p.experiences[0]
+    assert (e.start, e.end, e.is_current) == (start, end, current)
+
+
+def test_a_phantom_range_no_longer_inflates_years_of_experience(grids):
+    cv = HDR + "- Kafka : débit de 5000 - 8000 messages par seconde, conception des topics et partitions.\n"
+    a = score(grids["TLJ"], cv)
+    assert not any("3000" in str(c.justification) for c in a.criteria)
