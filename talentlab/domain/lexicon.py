@@ -193,8 +193,8 @@ S("kafka", "Kafka", "tech", ["Apache Kafka"],
                "dead-letter", "dlq", "retry", "rebalance", "kafka streams", "ksql", "consumer group", "exactly once", "idempotence",
                "debit", "throughput", "lag", "monitoring", "supervision", "exploitation", "administration"],
   advanced_terms=["kafka connect", "connect", "avro", "schema registry", "partition", "partitions", "rebalance", "kafka streams",
-                  "ksql", "exactly once", "cluster", "volumetrie", "throughput", "debit", "architecture", "exploitation",
-                  "administration", "consumer group", "dead letter", "dlq", "supervision"],
+                  "ksql", "exactly once", "cluster", "brokers", "volumetrie", "throughput", "debit", "architecture", "exploitation",
+                  "administration", "consumer group"],
   confusable_with=["rabbitmq"], narrowers=["Kafka Connect", "Avro", "Schema Registry", "Kafka Streams"])
 S("kafka_connect", "Kafka Connect", "tech", [], family="messaging", rarity=5,
   depth_terms=["connector", "connecteur", "source connector", "sink", "debezium", "jdbc", "transformations", "smt"])

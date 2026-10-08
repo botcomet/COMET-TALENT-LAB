@@ -85,7 +85,8 @@ def term_pattern(term: str) -> str:
     « design system », « design-system » et « design_system » sont un même terme.
     """
     parts = [re.escape(p) for p in re.split(r"[\s\-_]+", fold(term.strip())) if p]
-    return rf"(?<![a-z0-9+#]){_SEP.join(parts)}(?![a-z0-9+#])"
+    plural = "(?:s|x)?" if parts and parts[-1][-1:].isalpha() and not parts[-1].endswith(("s", "x")) and len(parts[-1]) > 3 else ""
+    return rf"(?<![a-z0-9+#]){_SEP.join(parts)}{plural}(?![a-z0-9+#])"
 
 
 def find_term(folded: str, term: str) -> list[tuple[int, int]]:
