@@ -58,6 +58,8 @@ _ROLES: dict[str, RoleFamily] = {}
 
 
 def S(key: str, label: str, kind: str, aliases: list[str] | None = None, **kw) -> Skill:
+    if "note" in kw:
+        kw["note"] = re.sub(r"\s*\(§[\d.]+\)", "", kw["note"])        # les notes sont lues par les recruteurs : pas de renvoi interne
     al = tuple(dict.fromkeys([label, *(aliases or [])]))
     kw = {k: (tuple(v) if isinstance(v, list) else v) for k, v in kw.items()}
     sk = Skill(key=key, label=label, kind=kind, aliases=al, **kw)
@@ -197,7 +199,8 @@ S("kafka", "Kafka", "tech", ["Apache Kafka"],
                   "administration", "consumer group"],
   confusable_with=["rabbitmq"], narrowers=["Kafka Connect", "Avro", "Schema Registry", "Kafka Streams"])
 S("kafka_connect", "Kafka Connect", "tech", [], family="messaging", rarity=5,
-  depth_terms=["connector", "connecteur", "source connector", "sink", "debezium", "jdbc", "transformations", "smt"])
+  depth_terms=["connector", "connecteur", "source connector", "sink", "source", "debezium", "jdbc", "transformations", "smt", "avro", "schema registry",
+               "cluster", "topics", "dead letter"])
 S("avro", "Avro", "tech", ["Apache Avro"], family="messaging", rarity=4, depth_terms=["schema", "schéma", "registry", "evolution", "compatibilite"])
 S("rabbitmq", "RabbitMQ", "tech", ["Rabbit MQ"], family="messaging", rarity=3, confusable_with=["kafka"])
 S("aws", "AWS", "tech", ["Amazon Web Services"], family="cloud", rarity=2, volatile=True,
@@ -227,6 +230,7 @@ S("tailwind", "Tailwind CSS", "tech", ["Tailwind", "TailwindCSS"], family="front
 S("design_system", "Design System", "tech", ["Design Systems", "système de design", "design-system", "DS", "bibliothèque de composants"],
   family="frontend", rarity=5, case_sensitive=["DS"],
   context_needed=["composant", "component", "token", "storybook", "ui", "front", "design", "marque", "brand", "accessib"],
+  note="Utiliser une bibliothèque de composants ne démontre pas la conception, la gouvernance et l'adoption à grande échelle d'un Design System",
   depth_terms=["composants reutilisables", "reusable components", "design tokens", "tokens", "variants", "variantes", "gouvernance",
                "governance", "contribution", "maintenance", "documentation", "storybook", "accessibilite", "a11y", "wcag", "rgaa",
                "packaging", "npm", "diffusion", "versioning", "semver", "multi-marques", "multi-produits", "multi-equipes",

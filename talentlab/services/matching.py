@@ -427,3 +427,39 @@ def purge_expired(db: Session, user: User) -> dict[str, int]:
         n_d += 1
     audit.log(db, user.id, "retention.purge", "system", "", "", documents=n_d, candidates=n_c)
     return {"documents": n_d, "candidates": n_c}
+
+
+# ----------------------------------------------------------------- IA assistée (optionnelle, vérifiée par citation)
+def llm_assist(db: Session, user: User, m: Mission, cand: Candidate, provider) -> dict[str, Any]:
+    """Le modèle DÉSIGNE des passages ; chaque citation est vérifiée dans le document et re-classée par le moteur déterministe.
+    Les passages vérifiés entrent comme preuves « à valider » (plafonnées à partiel) ; les autres sont des hypothèses hors score."""
+    from ..domain.claims import verify_claims
+    from ..llm.provider import LLMUnavailable, propose_claims
+    grid_row = ms.latest_frozen(db, m.id)
+    if grid_row is None:
+        raise HTTPException(409, "Aucune grille figée : l'IA n'est utilisée que pour documenter des critères validés.")
+    doc = db.scalar(select(Document).where(Document.candidate_id == cand.id, Document.status == "done").order_by(Document.created_at.desc()).limit(1))
+    if doc is None or not doc.text:
+        raise HTTPException(409, "Aucun document exploitable pour ce candidat.")
+    grid = ms.grid_from_row(grid_row)
+    criteria = [{"key": c.key, "label": c.label} for c in grid.scored() if c.kind in ("skill", "activity", "domain") and not c.members]
+    try:
+        claims = propose_claims(provider, doc.text, criteria)
+    except LLMUnavailable as e:
+        raise HTTPException(503, str(e))
+    verified = verify_claims(claims, doc.text)
+    stored = 0
+    for v in verified:
+        if v.status == "verified" and v.level is not None:
+            db.add(Evidence(mission_id=m.id, candidate_id=cand.id, subject_key=v.claim.criterion_key, kind=EvidenceKind.SUPPORTS.value, source=EvidenceSource.CV_DOCUMENT.value,
+                            reliability=Reliability.DOCUMENTED_CV.value, level=v.level.value, excerpt=doc.text[v.start:v.end], auto_generated=True, needs_verification=True,
+                            why_verify="Passage désigné par l'IA, vérifié par citation dans le document : à valider par un recruteur.", created_by=user.id))
+            stored += 1
+        else:
+            db.add(Evidence(mission_id=m.id, candidate_id=cand.id, subject_key=v.claim.criterion_key, kind=EvidenceKind.SUPPORTS.value, source=EvidenceSource.CV_DOCUMENT.value,
+                            reliability=Reliability.HYPOTHESIS.value, level=None, excerpt=(v.claim.quote or "(aucune citation)")[:400], auto_generated=True, needs_verification=True,
+                            why_verify=v.reason, created_by=user.id))
+    db.flush()
+    audit.log(db, user.id, "llm.assist", "candidate", cand.id, m.id, provider=getattr(provider, "name", "?"), claims=len(claims), verified=stored, downgraded=len(verified) - stored)
+    asm = reassess(db, user, m, cand, "ia_assistee", "Passages désignés par l'IA et vérifiés par citation")
+    return {"claims": [v.to_dict() for v in verified], "assessment": asm}

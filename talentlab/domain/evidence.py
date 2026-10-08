@@ -34,7 +34,8 @@ _OWNER = re.compile(r"\b(?:en\s+charge|responsable|referent|garant|seul\b|porteu
 _QUANT = re.compile(
     r"\b\d+(?:[\s.,]\d{3})*(?:[.,]\d+)?\s*(?:k|m|millions?|milliards?|milliers?|%|tps|tx|msg|messages?|transactions?|requetes?|utilisateurs?|equipes?|"
     r"developpeurs?|personnes?|pays|sites?|marques?|applications?|microservices?|topics?|partitions?|serveurs?|baies?|clients?|to|go|tb|gb|po|"
-    r"projets?|produits?|composants?|jours?|mois|ans)\b|\b(?:plusieurs|des)\s+(?:millions|milliers|centaines)\b")
+    r"projets?|produits?|composants?|connecteurs?|flux|schemas?|pipelines?|jobs?|clusters?|brokers?|lun|instances?|environnements?|regles?|"
+    r"scenarios?|incidents?|tickets?|endpoints?|enregistrements?|tables?|vm|jours?|mois|ans)\b|\b(?:plusieurs|des)\s+(?:millions|milliers|centaines)\b")
 _RESULT = re.compile(r"\b(?:reduction|reduit|diminu\w*|gain|ameliorat\w*|ameliore\w*|augment\w*|econom\w*|passe\s+de|disponibilite\s+de|taux\s+de|"
                      r"reduced|improved|increased|saved)\b|\b\d+(?:[.,]\d+)?\s*%|99[.,]\d")
 _DELIVERABLE = re.compile(r"\b(?:dossier\s+d'?architecture|documentation|documents?|plan\s+de|runbook|cartographie|rapports?|specifications?|cahier|"

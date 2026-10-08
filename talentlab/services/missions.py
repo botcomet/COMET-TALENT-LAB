@@ -155,17 +155,19 @@ def apply_requirement_proposal(db: Session, user: User, m: Mission, prop: Propos
     sk = lx.skill(key.split(":", 1)[1])
     cat = {"imperatif": Category.IMPERATIF, "fortement_differenciant": Category.DIFFERENCIANT, "souhaitable": Category.SOUHAITABLE,
            "a_clarifier": Category.A_CLARIFIER}[pl["category_hint"]]
-    src_kind = SourceKind.OFFICIAL_BRIEF if pl.get("relayed") else SourceKind.CLIENT_CLARIFICATION
+    # confirmée par un recruteur : « précision client validée » (rang 2) ; la provenance « relayée » reste tracée dans l'auteur et l'extrait
+    src_kind = SourceKind.CLIENT_CLARIFICATION
     cur = next((r for r in all_reqs(db, m.id) if r.key == key and r.status == "active"), None)
     dim, kind = ("technique", "skill") if sk and sk.kind in ("tech", "product") else (("responsabilite", "activity") if sk and sk.kind == "activity" else ("contexte_metier", "domain"))
     r = Req(id=new_id(), key=key, label=pl["topic_label"] or (sk.label if sk else key), category=cat, dimension=dim, kind=kind,
             terms=list(sk.aliases) if sk else [pl["topic_label"]], source_kind=src_kind, source_ref=prop.id, source_date=date.today(),
-            source_author=pl.get("author", ""), quote=pl["statement"][:300], rationale="Précision issue d'un échange, confirmée par le recruteur.",
+            source_author=("relayé par " if pl.get("relayed") else "") + pl.get("author", ""), quote=pl["statement"][:300],
+            rationale="Précision issue d'un échange" + (" relayée par un recruteur" if pl.get("relayed") else "") + ", confirmée par le recruteur ; à faire confirmer par le client si ce n'est pas déjà fait.",
             validated=True, validated_by=user.id, proposed_by="assistant")
     if cur and cur.depth_required == "advanced":
         r.depth_required = "advanced"
-    if cur and (cur.category != r.category or cur.source_kind != r.source_kind):
-        r.supersedes = cur.id if (not pl.get("relayed")) else None
+    if cur and cur.category != r.category and cur.rank > 1:
+        r.supersedes = cur.id            # remplacement explicite décidé par le recruteur ; jamais d'un impératif client CONFIRMÉ (rang 1) : conflit signalé à arbitrer
     return _save_req(db, m.id, r)
 
 

@@ -437,6 +437,21 @@ def correction(cid: str, body: S.CorrectionIn, ctx=Edit, db: Session = Depends(g
     return {"assessment": assessment_dict(r["assessment"]), "regression_case": r["regression_case"]}
 
 
+def llm_provider():
+    from ..llm.provider import get_provider
+    return get_provider()
+
+
+@router.post("/missions/{mission_id}/candidates/{cid}/llm-assist")
+def llm_assist(cid: str, ctx=Edit, db: Session = Depends(get_db), provider=Depends(llm_provider)):
+    """IA optionnelle : désigne des passages, vérifiés par citation ; sans fournisseur configuré, 503 explicite (rien n'est simulé)."""
+    m, _, user = ctx
+    if getattr(provider, "name", "none") == "none":
+        raise HTTPException(503, "Aucun fournisseur IA configuré (TALENTLAB_LLM_PROVIDER). Les fonctions déterministes restent disponibles.")
+    r = mt.llm_assist(db, user, m, _cand(db, m, cid), provider)
+    return {"claims": r["claims"], "assessment": assessment_dict(r["assessment"])}
+
+
 @router.post("/missions/{mission_id}/evidence/{eid}/review")
 def review_evidence(eid: str, body: S.ReviewIn, ctx=Edit, db: Session = Depends(get_db)):
     m, _, user = ctx
