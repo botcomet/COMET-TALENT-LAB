@@ -515,3 +515,25 @@ def test_date_discrepancy_is_reported_not_silently_fixed():
     cv2 = C.CV_TLJ_A.replace("(Janvier 2016 – Mars 2024)", "(Inconnue)")
     p2 = parse_cv(cv2, today=TODAY)
     assert any(e.dates_unknown for e in p2.experiences), "une date absente reste inconnue, jamais inventée"
+
+
+# =============================================================================== profondeur avancée : même exigence pour les échanges
+@pytest.mark.business
+def test_advanced_depth_requirement_applies_to_call_evidence_too(tlj):
+    grid, _ = tlj                                      # Kafka exigé en profondeur avancée
+    cv = C.CV_TLJ_C_DECLARED                           # Kafka seulement déclaré dans le CV
+    basic = "Il a développé un producteur Kafka et un consommateur Kafka sur 2 topics, avec retry."
+    advanced = ("Il a mis en place des connecteurs Kafka Connect, conçu les schémas Avro avec Schema Registry "
+                "et exploite le cluster Kafka en production.")
+    def ext_for(note):
+        facts = [f for f in extract_facts(note, "candidate_call_note") if f.topic_key == "skill:kafka"]
+        f = facts[0]
+        assert f.level == Level.CONFIRMED, "le texte de l'échange est classé confirmé au niveau pratique"
+        return {"skill:kafka": [ExtEvidence(id="x", subject_key="skill:kafka", kind=f.evidence_kind, excerpt=f.statement,
+                                            source=source_for("candidate_call_note"), reliability=reliability_for("candidate_call_note"),
+                                            level=f.level, validated=True)]}
+    a_basic = assess(grid, parse_cv(cv, today=TODAY), ext_for(basic), today=TODAY)
+    a_adv = assess(grid, parse_cv(cv, today=TODAY), ext_for(advanced), today=TODAY)
+    assert crit(a_basic, "kafka").level == Level.PARTIAL.value, "pratique de base décrite en appel ≠ profondeur avancée exigée"
+    assert any("profondeur avancée non démontrée" in n for n in crit(a_basic, "kafka").notes)
+    assert crit(a_adv, "kafka").level == Level.CONFIRMED.value

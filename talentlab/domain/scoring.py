@@ -102,7 +102,7 @@ def _eval_crit(c: gd.Criterion, parsed: ParsedCV, ext: dict[str, list[ExtEvidenc
     kind = {"skill": "skill", "activity": "activity", "domain": "domain"}.get(c.kind, "skill")
     ev = evaluate_text_criterion(parsed, c.key, c.label, c.terms, kind=kind, depth_required=c.depth_required, scope_terms=c.scope_terms,
                                  recency_sensitive=c.recency_sensitive, recency_window_years=c.recency_window_years, cfg=cfg)
-    return merge_external(ev, ext.get(c.key, []), c.label)
+    return merge_external(ev, ext.get(c.key, []), c.label, depth_required=c.depth_required, key=c.key, terms=c.terms)
 
 
 def _eval_years(c: gd.Criterion, parsed: ParsedCV, ext: dict[str, list[ExtEvidence]], cfg: EvalConfig) -> CritEvidence:

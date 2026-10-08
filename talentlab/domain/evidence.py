@@ -284,6 +284,23 @@ def _years_since_end(e: Experience | None, today: date) -> float | None:
     return None if o is None else max(0.0, (today.year * 12 + today.month - 1 - o) / 12)
 
 
+def advanced_terms_in(sk: lx.Skill, excerpt: str, *, participant: bool = False) -> set[str]:
+    """Indices de profondeur avancée présents dans un extrait, avec les garde-fous du référentiel :
+    « volumétrie » ne compte que si le débit chiffré est élevé ; « architecture » ne compte pas si le rôle n'était que participant."""
+    f_it = fold(excerpt)
+    found: set[str] = set()
+    for t in sk.advanced_terms:
+        if not re.search(term_pattern(t), f_it):
+            continue
+        tf = fold(t)
+        if tf in _VOLUME_TERMS and not ((volume_per_day(excerpt) or 0) >= HIGH_VOLUME_PER_DAY):
+            continue
+        if tf in _OWNERSHIP_TERMS and participant:
+            continue
+        found.add(t)
+    return found
+
+
 # ----------------------------------------------------------------- évaluation d'un critère
 def _location(parsed: ParsedCV, pos: int, exp: Experience | None) -> str:
     if exp is not None:
@@ -390,18 +407,8 @@ def evaluate_text_criterion(parsed: ParsedCV, key: str, label: str, terms: list[
     if depth_required == "advanced" and sk.advanced_terms:
         found: set[str] = set()
         for it in items:
-            if it.location != "experience":
-                continue
-            f_it = fold(it.excerpt)
-            for t in sk.advanced_terms:
-                if not re.search(term_pattern(t), f_it):
-                    continue
-                tf = fold(t)
-                if tf in _VOLUME_TERMS and not ((volume_per_day(it.excerpt) or 0) >= HIGH_VOLUME_PER_DAY):
-                    continue          # « volumétrie » ne prouve rien si le volume chiffré est faible ou absent
-                if tf in _OWNERSHIP_TERMS and it.signals.get("role") == "participant":
-                    continue          # « participé aux choix d'architecture » ≠ architecte décisionnaire (§15.1)
-                found.add(t)
+            if it.location == "experience":
+                found |= advanced_terms_in(sk, it.excerpt, participant=it.signals.get("role") == "participant")
         adv_found = sorted(found, key=str.lower)
         uniq_found = {fold(t) for t in adv_found}
         adv_missing = [t for t in sk.narrowers or sk.advanced_terms if fold(t) not in uniq_found][:6]
@@ -466,7 +473,8 @@ def _justify(level: Level, best: EvItem, label: str, notes: list[str]) -> str:
 _LEVEL_CAP_BY_REL = {Reliability.UNSUPPORTED_CLAIM: Level.DECLARED}
 
 
-def merge_external(ev: CritEvidence, ext: list[ExtEvidence], label: str, *, kind_notes: list[str] | None = None) -> CritEvidence:
+def merge_external(ev: CritEvidence, ext: list[ExtEvidence], label: str, *, kind_notes: list[str] | None = None,
+                   depth_required: str = "practice", key: str = "", terms: list[str] | None = None, min_advanced: int = 2) -> CritEvidence:
     """Combine la preuve CV et les preuves d'appels/entretiens pour UN critère.
 
     - une transcription automatique non validée est une source à vérifier : plafonnée à « partiel » ;
@@ -489,6 +497,19 @@ def merge_external(ev: CritEvidence, ext: list[ExtEvidence], label: str, *, kind
         if e.kind == EvidenceKind.SUPPORTS:
             lv = e.level or Level.PARTIAL
             lv = min(lv, _LEVEL_CAP_BY_REL.get(e.reliability, Level.CONFIRMED), key=lambda l: LEVEL_ORDER[l])
+            if depth_required == "advanced" and key and LEVEL_ORDER[lv] > LEVEL_ORDER[Level.PARTIAL]:
+                # la profondeur avancée exigée vaut aussi pour les échanges : indices du CV + indices de cet extrait
+                sk = skill_for(key, terms or [], label)
+                have = {fold(t) for t in ev.advanced_found} | {fold(t) for t in advanced_terms_in(sk, e.excerpt)}
+                if len(have) < min_advanced:
+                    lv = Level.PARTIAL
+                    loc_note_extra = f" — profondeur avancée non démontrée par cet échange ({len(have)} indice(s) sur {min_advanced})"
+                    notes.append(f"Échange du {e.date or 'jour'} : pratique décrite mais profondeur avancée non démontrée ({len(have)} indice(s)).")
+                else:
+                    loc_note_extra = ""
+            else:
+                loc_note_extra = ""
+            loc_note += loc_note_extra
             if e.auto_generated and not e.validated:
                 lv = min(lv, Level.PARTIAL, key=lambda l: LEVEL_ORDER[l])
                 loc_note += " — transcription à vérifier : niveau plafonné à « partiel » tant que non validée"

@@ -219,7 +219,7 @@ def _drop_secondary(v: SearchVariant) -> Iterator[Step]:
         if not any(x.kind != "role" for x in c.groups):
             continue
         labels = ", ".join(f"« {g.label} »" for g in batch)
-        cats = sorted({(g.category or "non rattaché au brief").replace("_", " ") for g in batch})
+        cats = sorted({("indice de profondeur — l'exigence elle-même reste imposée" if g.kind == "narrower" else (g.category or "non rattaché au brief").replace("_", " ")) for g in batch})
         yield (f"Critère(s) secondaire(s) {labels} ({' / '.join(cats)}) retiré(s) de la RECHERCHE — pas de la grille. "
                "Ils sont vérifiés au matching et l'exigence client reste inchangée.",
                c.refresh(), [f"Les profils sans {labels} ressortiront : le scoring les départagera.", "Le besoin client n'est pas modifié (grille intacte)."])
