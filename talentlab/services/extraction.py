@@ -62,3 +62,11 @@ def extract_isolated(data: bytes, filename: str, *, timeout_s: int = 30, memory_
     if msg[0] == "ok":
         return msg[1]
     raise ExtractionError(msg[1], msg[2])
+
+
+def extract_for_settings(data: bytes, filename: str, settings: Any) -> Extraction:
+    """Extraction selon la configuration : directe en mode ``inline`` (tests), sinon dans un processus isolé aux ressources bornées."""
+    limits = dict(max_bytes=settings.max_file_mb * 1024 * 1024, max_pages=settings.max_pages, min_chars=settings.min_chars, max_chars=settings.max_chars)
+    if settings.processing_mode == "inline":
+        return extract_text(data, filename, **limits)
+    return extract_isolated(data, filename, timeout_s=settings.extraction_timeout_s, memory_mb=settings.extraction_memory_mb, **limits)

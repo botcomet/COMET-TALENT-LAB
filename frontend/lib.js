@@ -95,3 +95,34 @@ export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('Requête copiée dans le presse-papiers.'); }
   catch { const ta = h('textarea', {}, text); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Requête copiée.'); }
 }
+
+// Importer un fichier (PDF, Word, texte) : le TEXTE extrait par le serveur remplit le champ, que le recruteur relit et corrige.
+// Rien n'est conservé côté serveur ; une extraction qui échoue est expliquée, jamais silencieuse.
+export function fileImporter(target, { max = 30000, label = 'Importer un fichier (PDF, Word ou texte)' } = {}) {
+  const status = h('div', { 'aria-live': 'polite' });
+  const input = h('input', { type: 'file', accept: '.pdf,.docx,.txt,.md,.eml', 'aria-label': label });
+  input.addEventListener('change', async () => {
+    const f = input.files[0];
+    if (!f) return;
+    clear(status).append(h('span', { class: 'muted' }, 'Lecture du fichier…'));
+    try {
+      const r = await api('/tools/extract-text', { method: 'POST', files: [f] });
+      if (r.characters > max) { clear(status).append(h('div', { class: 'alert bad' }, `Le texte extrait compte ${r.characters} caractères (maximum ${max}) : le raccourcir avant de l'utiliser.`)); }
+      else {
+        target.value = r.text;
+        clear(status).append(h('div', { class: 'alert ' + (r.warnings.length || r.quality !== 'ok' ? 'warn' : 'ok'), id: 'import-status' }, `${r.characters} caractères extraits${r.pages ? ` (${r.pages} page(s))` : ''}. Relire et corriger le texte avant de continuer.`,
+          ...r.warnings.map(w => h('div', { class: 'hint' }, w)), h('div', { class: 'hint' }, r.note)));
+      }
+    } catch (e) { clear(status).append(h('div', { class: 'alert bad', id: 'import-status' }, e.message)); }
+    input.value = '';
+  });
+  return h('div', {}, input, status);
+}
+
+// Télécharger un texte (Markdown) sans passer par le serveur : le contenu ne quitte pas le navigateur.
+export function downloadText(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+  const a = h('a', { href: url, download: filename });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}

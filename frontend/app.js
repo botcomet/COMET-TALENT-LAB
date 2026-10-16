@@ -1,4 +1,4 @@
-import { $, api, ApiError, clear, copyText, field, guard, h, toast, fmtDate, chip } from './lib.js';
+import { $, api, ApiError, clear, copyText, field, fileImporter, guard, h, toast, fmtDate, chip } from './lib.js';
 import { renderMission, stopPolling } from './mission.js';
 import { renderAssistant } from './assistant.js';
 
@@ -102,14 +102,13 @@ async function missionList(main, scope) {
 function newMission(main) {
   const client = h('input', { type: 'text', maxlength: 200, placeholder: 'Client (nom interne ou code)' });
   const title = h('input', { type: 'text', maxlength: 300, placeholder: 'Intitulé de la mission', style: undefined });
-  const brief = h('textarea', { maxlength: 60000, rows: 14, placeholder: "Coller le descriptif client : contexte, missions, compétences requises / souhaitées, modalités…" });
-  const file = h('input', { type: 'file', accept: '.txt,.md', 'aria-label': 'Importer un descriptif texte' });
-  file.addEventListener('change', async () => { const f = file.files[0]; if (f) brief.value = await f.text(); });
+  const brief = h('textarea', { maxlength: 30000, rows: 14, placeholder: "Coller le descriptif client : contexte, missions, compétences requises / souhaitées, modalités…" });
+  const file = fileImporter(brief, { max: 30000, label: 'Importer un descriptif (PDF, Word ou texte)' });
   main.append(h('h1', {}, 'Nouvelle mission'),
     h('div', { class: 'card' },
       h('div', { class: 'grid cols-2' }, field('Intitulé', title), field('Client', client)),
       field('Descriptif du besoin', brief, "Le titre ne suffit jamais : l'analyse identifie le travail réellement demandé. Rien n'est inventé : une information absente devient une question."),
-      field('… ou importer un fichier texte', file),
+      field('… ou importer un fichier (PDF, Word, texte)', file, 'Le texte extrait remplit le champ ci-dessus : relisez-le et corrigez-le avant de lancer l’analyse. Le fichier n’est pas conservé.'),
       h('div', { class: 'row end' }, h('button', { class: 'primary', id: 'create-mission', onclick: () => guard(async () => {
         const m = await api('/missions', { method: 'POST', body: { client: client.value, title: title.value, brief: brief.value } });
         toast('Mission créée : vérifiez et validez les critères proposés.');

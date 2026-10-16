@@ -35,13 +35,15 @@ class BodyLimit:
     """Refuse (413) toute requête dont le corps dépasse la limite : ``Content-Length`` déclaré, ou octets réellement reçus (transfert fragmenté).
     Import de CV : lot × taille maximale ; toute autre requête : 2 Mo."""
 
-    def __init__(self, app, upload_limit, default_limit: int = 2 * 1024 * 1024):
+    def __init__(self, app, upload_limit, single_file_limit=None, default_limit: int = 2 * 1024 * 1024):
         self.app, self.upload_limit, self.default_limit = app, upload_limit, default_limit
+        self.single_file_limit = single_file_limit or upload_limit
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["method"] not in ("POST", "PUT", "PATCH"):
             return await self.app(scope, receive, send)
-        limit = self.upload_limit() if scope["path"].endswith("/cvs") else self.default_limit
+        path = scope["path"]
+        limit = self.upload_limit() if path.endswith("/cvs") else (self.single_file_limit() if path.endswith("/tools/extract-text") else self.default_limit)
         declared = next((v for k, v in scope["headers"] if k == b"content-length"), None)
         if declared is not None and declared.isdigit() and int(declared) > limit:
             return await self._reject(send)
@@ -110,7 +112,8 @@ def create_app() -> FastAPI:
         logging.getLogger("talentlab").exception("Erreur non gérée sur %s %s", request.method, request.url.path)
         return JSONResponse({"detail": "Erreur interne. L'incident a été journalisé."}, status_code=500)
 
-    app.add_middleware(BodyLimit, upload_limit=lambda: get_settings().max_batch_size * get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024)
+    app.add_middleware(BodyLimit, upload_limit=lambda: get_settings().max_batch_size * get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024,
+                       single_file_limit=lambda: get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024)
     if FRONTEND.exists():
         app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
     return app

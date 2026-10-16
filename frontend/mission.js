@@ -1,4 +1,4 @@
-import { $, api, bar, CATEGORIES, chip, clear, copyText, field, fmtDate, guard, h, levelChip, SOURCE_KINDS, STATUSES, STRATEGIES, tierChip, toast, TRIGGERS, LEVELS } from './lib.js';
+import { $, api, bar, CATEGORIES, chip, clear, copyText, downloadText, field, fileImporter, fmtDate, guard, h, levelChip, SOURCE_KINDS, STATUSES, STRATEGIES, tierChip, toast, TRIGGERS, LEVELS } from './lib.js';
 import { renderAssistant } from './assistant.js';
 
 let pollTimer = null;
@@ -66,7 +66,7 @@ function sourceForm(id, reload) {
   const author = h('input', { type: 'text', maxlength: 200, placeholder: 'Qui l’a dit ? (représentant client autorisé)' }); const date = h('input', { type: 'date' });
   const text = h('textarea', { rows: 3, maxlength: 60000, placeholder: 'Précision, note d’appel client, retour d’entretien…' });
   return h('details', {}, h('summary', {}, 'Ajouter une précision (appel client, retour d’entretien…)'),
-    h('div', { class: 'grid cols-2' }, field('Type de source', kind), field('Auteur (obligatoire pour une précision client)', author)), field('Date', date), field('Texte', text),
+    h('div', { class: 'grid cols-2' }, field('Type de source', kind), field('Auteur (obligatoire pour une précision client)', author)), field('Date', date), field('Texte', text), field('… ou importer un fichier', fileImporter(text, { max: 60000 })),
     h('div', { class: 'row end' }, h('button', { id: 'add-source', class: 'primary', onclick: () => guard(async () => {
       await api(`/missions/${id}/sources`, { method: 'POST', body: { kind: kind.value, text: text.value, author: author.value, source_date: date.value || null } });
       toast('Source ajoutée : les nouvelles exigences sont proposées, jamais appliquées sans validation.'); reload();
@@ -338,7 +338,17 @@ async function candidateDetail(id, cid, canEdit, reloadList) {
   box.append(h('div', { class: 'card' }, h('header', {}, h('h2', {}, 'Export pour DT Editor'), h('small', { class: 'muted' }, 'Matière fidèle et anonymisée — pas un second éditeur de dossier')),
     h('div', { class: 'row' }, h('button', { id: 'export-dt', onclick: () => guard(async () => {
       const r = await api(`/missions/${id}/candidates/${cid}/export/dt`);
-      clear(exp).append(h('div', { class: 'query' }, r.markdown), h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => copyText(JSON.stringify(r, null, 2)) }, 'Copier le JSON structuré')));
+      const base = `dossier-${r.candidate.acronym || 'candidat'}`;
+      clear(exp).append(
+        h('h3', {}, 'Format de structuration Comet (à relire avant tout envoi)'),
+        h('p', { class: 'hint' }, 'Les phrases sont celles du CV, rangées sans réécriture : Entreprise — Intitulé — Dates, Contexte, Réalisations par parties thématiques, Environnement technique. Aucun niveau ni point à vérifier ne figure dans ce texte.'),
+        h('div', { class: 'query', id: 'dossier-client' }, r.dossier_comet),
+        h('div', { class: 'row' }, h('button', { class: 'small', id: 'copy-dossier', onclick: () => copyText(r.dossier_comet) }, 'Copier'),
+          h('button', { class: 'small', id: 'download-dossier', onclick: () => downloadText(`${base}.md`, r.dossier_comet) }, 'Télécharger (.md)'),
+          h('button', { class: 'small', onclick: () => copyText(JSON.stringify(r, null, 2)) }, 'Copier le JSON structuré')),
+        h('details', {}, h('summary', {}, 'Interne : éléments à vérifier et provenance (ne pas transmettre au client)'),
+          h('div', { class: 'query', id: 'dossier-internal' }, r.dossier_internal),
+          h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => downloadText(`${base}-interne.md`, r.dossier_internal) }, 'Télécharger (.md)'))));
     }) }, 'Exporter la synthèse'),
       canEdit ? h('button', { id: 'llm-assist', onclick: () => guard(async () => { const r = await api(`/missions/${id}/candidates/${cid}/llm-assist`, { method: 'POST' }); toast(`${r.claims.filter(x => x.status === 'verified').length} passage(s) vérifié(s) par citation.`); reload(); }) }, 'Passages désignés par l’IA (optionnel)') : null), exp));
 }
@@ -353,7 +363,7 @@ function noteCard(id, cid, reload) {
   const kind = h('select', {}, [['candidate_call_note', 'Notes d’appel candidat'], ['transcript', 'Transcription texte (automatique)'], ['interview_report', 'Compte rendu d’entretien'], ['complementary_doc', 'Document complémentaire autorisé']].map(([k, v]) => h('option', { value: k }, v)));
   const text = h('textarea', { rows: 5, maxlength: 100000, id: 'note-text', placeholder: 'Notes ou transcription. Une transcription automatique est une source à vérifier.' });
   const out = h('div', { id: 'note-out' });
-  return h('div', { class: 'card' }, h('header', {}, h('h2', {}, 'Ajouter des informations d’appel')), field('Type', kind), field('Contenu', text),
+  return h('div', { class: 'card' }, h('header', {}, h('h2', {}, 'Ajouter des informations d’appel')), field('Type', kind), field('Contenu', text), field('… ou importer un fichier', fileImporter(text, { max: 100000 })),
     h('div', { class: 'row end' }, h('button', { id: 'add-note', class: 'primary', onclick: () => guard(async () => {
       const r = await api(`/missions/${id}/candidates/${cid}/notes`, { method: 'POST', body: { kind: kind.value, text: text.value, auto_generated: kind.value === 'transcript' } });
       text.value = '';

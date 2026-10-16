@@ -29,7 +29,7 @@ from ..domain.safety import scrub
 from ..models import (Assessment, CallNote, Candidate, Document, Evidence, EvidenceReview, Grid, Mission, Proposal, Qualification, ScoringCorrection, User)
 from ..enums_app import CANDIDATE_STATUSES
 from . import missions as ms
-from .extraction import extract_isolated
+from .extraction import extract_for_settings
 
 _executors: dict[str, ThreadPoolExecutor] = {}
 _executors_lock = threading.Lock()
@@ -129,11 +129,7 @@ def process_document(doc_id: str, user_id: str) -> None:
             db.commit()
             _stage(db, d, "processing", 10, "lecture du document")
             try:
-                limits = dict(max_bytes=s.max_file_mb * 1024 * 1024, max_pages=s.max_pages, min_chars=s.min_chars, max_chars=s.max_chars)
-                if s.processing_mode == "inline":
-                    ex = extract_text(d.blob or b"", d.filename, **limits)
-                else:                                           # production : processus isolé, mémoire/CPU/temps bornés
-                    ex = extract_isolated(d.blob or b"", d.filename, timeout_s=s.extraction_timeout_s, memory_mb=s.extraction_memory_mb, **limits)
+                ex = extract_for_settings(d.blob or b"", d.filename, s)
             except ExtractionError as e:
                 d.status, d.progress, d.stage, d.error_code, d.error_message = "failed", 100, "échec de l'extraction", e.code, e.message
                 d.blob = None                                   # un fichier refusé n'est pas conservé (minimisation, pas d'accumulation)

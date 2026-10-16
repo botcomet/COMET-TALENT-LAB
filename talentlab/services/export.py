@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..domain import dossier
 from ..domain.cv_extract import parse_cv
 from ..domain.enums import Category, Level
 from ..domain.evidence import _items
@@ -114,6 +115,10 @@ def dt_export(db: Session, m: Mission, cand: Candidate, *, relevant_only: bool =
         },
     }
     out["markdown"] = _markdown(out)
+    # format de structuration Comet (§19.1) : phrases du CV rangées sans réécriture ; l'export client ne contient aucune information interne
+    out["dossier_comet"] = dossier.render_client(out["dossier_material"], acronym=out["candidate"]["acronym"], mission_title=m.title,
+                                                 demonstrated=[d["skill"] for d in demonstrated if d["level"] == Level.CONFIRMED.value], validated_calls=validated_calls)
+    out["dossier_internal"] = dossier.render_internal(out)
     return out
 
 

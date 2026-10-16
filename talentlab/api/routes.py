@@ -349,6 +349,26 @@ def upload_cvs(files: list[UploadFile] = File(...), ctx=Edit, db: Session = Depe
     return {"documents": [mt.doc_dict(d) for d in docs], "grid_frozen": ms.latest_frozen(db, m.id) is not None}
 
 
+@router.post("/tools/extract-text")
+def extract_text_from_file(files: list[UploadFile] = File(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Importer un descriptif (PDF, Word, texte) : le TEXTE extrait est renvoyé au recruteur, qui le relit et le corrige avant de l'utiliser.
+    Même extraction isolée et mêmes limites que l'import de CV ; **rien n'est conservé** (ni le fichier, ni le texte)."""
+    from ..domain.cv_extract import ExtractionError
+    from ..services.extraction import extract_for_settings
+    s = get_settings()
+    if len(files) != 1:
+        raise HTTPException(422, "Un seul fichier à la fois.")
+    f = files[0]
+    data = f.file.read(s.max_file_mb * 1024 * 1024 + 1)
+    try:
+        ex = extract_for_settings(data, f.filename or "document", s)
+    except ExtractionError as e:
+        raise HTTPException(422, {"message": e.message, "code": e.code})
+    audit.log(db, user.id, "document.extract", "user", user.id, bytes=len(data), characters=len(ex.text), pages=ex.pages)
+    return {"text": ex.text, "characters": len(ex.text), "pages": ex.pages, "quality": ex.quality, "warnings": ex.warnings,
+            "note": "Relire le texte extrait avant de lancer l'analyse : une mise en page complexe (colonnes, tableaux) peut mélanger l'ordre des phrases."}
+
+
 @router.get("/missions/{mission_id}/documents")
 def list_documents(ctx=Read, db: Session = Depends(get_db)):
     m, _, _ = ctx

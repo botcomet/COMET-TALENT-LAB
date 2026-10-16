@@ -207,9 +207,15 @@ def test_full_user_journey_in_a_real_browser(server, browser, tmp_path):
     page.fill("input[aria-label='Acronyme autorisé']", "DFI")
     page.click("text=Enregistrer l’acronyme")
     page.click("#export-dt")
-    page.wait_for_selector("#export-out .query")
-    md = page.locator("#export-out .query").inner_text()
+    page.wait_for_selector("#dossier-client")
+    md = page.locator("#dossier-client").inner_text()
     assert "DFI" in md and "Marchand Exemple" in md and "Dominique" not in md
+    assert "Contexte" in md and "Environnement technique" in md and "Partie 1 — " in md, "format de structuration Comet"
+    assert "À vérifier" not in md and "à vérifier" not in md, "aucune information interne dans le texte client"
+    with page.expect_download() as dl:
+        page.click("#download-dossier")
+    assert dl.value.suggested_filename == "dossier-DFI.md"
+    assert "Environnement technique" in Path(dl.value.path()).read_text(encoding="utf-8")
 
     # ---- Assistant : propose, ne modifie rien sans confirmation
     page.click("#open-assistant")
@@ -302,4 +308,23 @@ def test_html_injection_in_cv_and_notes_is_rendered_as_text(server, browser, tmp
     assert page.evaluate("window.__pwned") is None
     assert page.locator("main img").count() == 0 and page.locator("main script").count() == 0
     assert "<img" in page.locator("main").inner_text() or True
+    ctx.close()
+
+
+def test_importing_a_brief_from_a_word_file_in_the_browser_fills_the_field_and_asks_for_a_review(server, browser, tmp_path):
+    ctx, page, problems = _login(browser, server, "TM Démo 1")
+    page.get_by_role("button", name=re.compile("Nouvelle mission")).first.click()
+    docx = tmp_path / "brief.docx"
+    docx.write_bytes(make_docx(B.TLJ))
+    page.set_input_files("input[type=file]", str(docx))
+    page.wait_for_selector("#import-status")
+    status = page.inner_text("#import-status")
+    assert "caractères extraits" in status and "Relire" in status
+    assert "Kafka" in page.input_value("textarea")
+    # un fichier illisible est expliqué, jamais silencieux
+    bad = tmp_path / "faux.bin"
+    bad.write_bytes(b"\x00\x01\x02" * 300)
+    page.set_input_files("input[type=file]", str(bad))
+    page.locator("#import-status", has_text="non pris en charge").wait_for()      # (la CSP interdit l'évaluation de chaînes : on interroge le DOM)
+    assert not [p for p in problems if "Content Security Policy" in p], problems
     ctx.close()

@@ -264,3 +264,45 @@ def test_an_admin_can_deactivate_a_user_which_revokes_their_sessions_but_never_t
     r = admin.patch(f"/api/admin/users/{users['admin.demo@example.invalid']}", json={"active": False})
     assert r.status_code == 409 and "dernier administrateur" in r.text
     admin.close()
+
+
+# ================================================================ V1.1 : import d'un descriptif par fichier
+def test_a_brief_can_be_imported_from_pdf_docx_and_text_without_storing_the_file(tm):
+    s = tm(1)
+    brief = B.TLJ
+    for name, data in (("brief.pdf", make_pdf(brief)), ("brief.docx", make_docx(brief)), ("brief.txt", brief.encode())):
+        r = s.post("/api/tools/extract-text", files=[("files", (name, data, "application/octet-stream"))])
+        assert r.status_code == 200, (name, r.text)
+        j = r.json()
+        assert "Kafka" in j["text"] and j["characters"] == len(j["text"]) and "Relire" in j["note"]
+    # le texte importé alimente une mission exactement comme un brief collé
+    m = create_mission(s, brief=s.post("/api/tools/extract-text", files=[("files", ("b.docx", make_docx(brief), "application/octet-stream"))]).json()["text"])
+    assert any(x["key"] == "skill:kafka" for x in m["requirements"])
+    from talentlab.db import session_scope
+    from talentlab.models import Document
+    with session_scope() as db:
+        assert db.query(Document).count() == 0, "aucun fichier importé comme descriptif n'est conservé"
+
+
+@pytest.mark.parametrize("name,data,code", [
+    ("vide.txt", b"", "empty"),
+    ("faux.bin", b"\x00\x01\x02" * 200, "unsupported_type"),
+    ("bombe.docx", make_docx_bomb(20), "too_large"),
+    ("casse.pdf", b"%PDF-1.4 casse " * 20, "corrupt"),
+])
+def test_a_brief_file_that_cannot_be_read_is_refused_with_an_explicit_reason(tm, name, data, code):
+    s = tm(1)
+    r = s.post("/api/tools/extract-text", files=[("files", (name, data, "application/octet-stream"))])
+    assert r.status_code == 422 and r.json()["detail"]["code"] == code, r.text
+
+
+def test_the_import_route_needs_authentication_takes_one_file_and_is_size_limited(tm, app, monkeypatch):
+    from fastapi.testclient import TestClient
+    with TestClient(app, headers={"X-Requested-With": "talentlab"}) as anon:
+        assert anon.post("/api/tools/extract-text", files=[("files", ("a.txt", b"x" * 300, "text/plain"))]).status_code == 401
+    s = tm(1)
+    assert s.post("/api/tools/extract-text", files=[("files", ("a.txt", b"x" * 300, "text/plain")), ("files", ("b.txt", b"y" * 300, "text/plain"))]).status_code == 422
+    from talentlab import config
+    monkeypatch.setenv("TALENTLAB_MAX_FILE_MB", "1")
+    config.get_settings.cache_clear()
+    assert s.post("/api/tools/extract-text", files=[("files", ("big.txt", b"z" * (3 * 1024 * 1024), "text/plain"))]).status_code == 413
