@@ -21,7 +21,7 @@ a { color: inherit; } p { margin: .25rem 0 .75rem; } small, .muted { color: var(
 .topbar { display: flex; align-items: center; gap: 1rem; padding: .6rem 1.25rem; background: #000; color: #fff; position: sticky; top: 0; z-index: 20; }
 .topbar a { color: #fff; text-decoration: none; } .brand { font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .brand b { background: var(--yellow); color: #000; padding: 0 .35rem; margin-left: .3rem; }
-.topbar .spacer { flex: 1; } .topbar nav { display: flex; gap: .25rem; } .topbar nav a { padding: .25rem .6rem; border: 1px solid transparent; }
+.topbar .spacer { flex: 1; } .topbar nav { display: flex; gap: .25rem; flex-wrap: wrap; } .topbar nav a { padding: .25rem .6rem; border: 1px solid transparent; }
 .topbar nav a:hover, .topbar nav a[aria-current] { border-color: var(--yellow); }
 main { max-width: 1280px; margin: 0 auto; padding: 1.25rem 1.25rem 4rem; outline: none; }
 .grid { display: grid; gap: 1rem; } .cols-4 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); } .cols-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }

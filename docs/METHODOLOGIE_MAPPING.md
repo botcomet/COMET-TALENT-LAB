@@ -44,7 +44,9 @@ Chaque règle du référentiel (Partie III et IV du prompt maître) est traduite
 | Contraintes (TJM, présence, dispo, fuseau) séparées de la technique ; inconnu ≠ incompatible | `scoring.evaluate_constraints` | `test_business_5_…`, `test_explicit_refusal_of_constraints_is_flagged_clearly_and_separate_from_skills` |
 | Potentiel = borne haute, jamais une compétence acquise | `scoring.assess` | `test_business_4_…` (`score_potential < 100`) |
 | Trois évaluations distinctes (adéquation / qualité d'information / qualité du dossier) | `Assessment.score_*`, `information_quality`, `dossier_quality=None` | `test_information_quality_is_separate_from_fit_and_ignores_prose_style` |
-| Seuils 96 / 95 configurables ; aucun rejet automatique | `grid.thresholds`, `Tier`, `set_status` | `test_work_view_hides_but_never_deletes_low_scores`, `test_candidate_status_discard_requires_a_human_reason` |
+| Seuils 96 / 95 configurables ; aucun rejet automatique (y compris par l'assistant : « quels profils écarter ? » liste sans écarter) | `grid.thresholds`, `Tier`, `set_status`, `assistant.handle` | `test_work_view_hides_but_never_deletes_low_scores`, `test_candidate_status_discard_requires_a_human_reason`, `test_assistant_never_discards_it_lists_the_furthest_profiles_for_a_human_decision` |
+| Un chiffre cité par l'utilisateur n'est pas pris pour le score : l'assistant signale l'écart avec le score actuel | `assistant.handle` (explication de score) | `test_assistant_flags_a_cited_score_that_differs_from_the_current_documented_score`, `test_assistant_does_not_mistake_a_date_or_a_duration_for_a_cited_score` |
+| Présentation des profils « intéressants » : les impératifs ne se compensent pas (même ordre que la liste des candidats) | `scoring.rank_key` | `test_assistant_interesting_profiles_never_put_an_open_mandatory_before_a_fully_confirmed_one` |
 | Récence | `evidence` (fenêtre, volatilité) | `test_business_12_…`, `test_explicit_client_recency_requirement_sets_a_short_window` |
 | Cohérence des dates ; aucune date inventée | `cv_extract.parse_cv` | `test_date_discrepancy_is_reported_not_silently_fixed` |
 

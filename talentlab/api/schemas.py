@@ -204,7 +204,7 @@ class PublishIn(Strict):
 
 
 class UserIn(Strict):
-    email: str = Field(max_length=255)
+    email: str = Field(max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     display_name: str = Field(min_length=2, max_length=120)
     role: Literal["talent_manager", "pilote", "admin"] = "talent_manager"
     region: str = Field(default="", max_length=80)

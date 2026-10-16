@@ -328,3 +328,67 @@ def test_importing_a_brief_from_a_word_file_in_the_browser_fills_the_field_and_a
     page.locator("#import-status", has_text="non pris en charge").wait_for()      # (la CSP interdit l'évaluation de chaînes : on interroge le DOM)
     assert not [p for p in problems if "Content Security Policy" in p], problems
     ctx.close()
+
+
+def test_history_search_in_the_browser_finds_a_mission_and_hides_the_admin_entry_from_a_talent_manager(server, browser):
+    ctx, page, problems = _login(browser, server, "TM Démo 2")
+    assert page.locator("#topbar nav a", has_text="Administration").count() == 0, "l'entrée d'administration n'est pas proposée à un Talent Manager"
+    page.get_by_role("button", name=re.compile("Nouvelle mission")).first.click()
+    page.fill("input[placeholder^='Intitulé']", "Architecte données fictif HISTO")
+    page.fill("input[placeholder^='Client']", "Client Histo (fictif)")
+    page.fill("textarea", B.TLJ)
+    page.click("#create-mission")
+    page.wait_for_url(re.compile(r"#/mission/.+/needs"))
+    page.locator("#topbar nav a", has_text="Historique").click()
+    page.fill("#history-q", "histo")
+    page.click("#history-go")
+    page.locator(".history-result", has_text="Architecte données fictif HISTO").wait_for()
+    assert "Propriétaire" in page.inner_text(".history-result") and "Client Histo" in page.inner_text(".history-result")
+    assert "candidats ni sur le contenu des CV" in page.inner_text("main")
+    # recherche sans résultat : message explicite
+    page.fill("#history-q", "zzzintrouvablezzz")
+    page.click("#history-go")
+    page.locator("#history-out .alert", has_text="Aucun résultat").wait_for()
+    # un lien profond vers l'écran d'administration est refusé côté interface ET côté serveur
+    page.goto(server + "/#/admin")
+    page.locator("main", has_text="Accès réservé aux administrateurs").wait_for()
+    assert page.evaluate("fetch('/api/admin/users', {headers: {'X-Requested-With': 'talentlab'}}).then(r => r.status)") == 403
+    _shot(page, "history")
+    assert not [p for p in problems if "Content Security Policy" in p or "pageerror" in p], problems
+    ctx.close()
+
+
+def test_admin_screen_in_the_browser_creates_deactivates_and_verifies_the_audit_chain(server, browser):
+    ctx, page, problems = _login(browser, server, "Admin Démo")
+    page.locator("#topbar nav a", has_text="Administration").click()
+    page.locator("#users-table").wait_for()
+    page.locator("#purge-preview").wait_for()               # les cartes se chargent en parallèle
+    assert page.locator("#users-table tbody tr").count() >= 6
+    assert "Maintenance planifiée" in page.inner_text("#admin-status") and "Aucune donnée n’a dépassé" in page.inner_text("#purge-preview")
+    assert page.locator("#purge-btn").is_disabled(), "rien à purger : le bouton est inactif"
+    # création puis désactivation (la boîte de confirmation est acceptée par le fixture)
+    page.fill("#new-user-email", "recrue.e2e@example.invalid")
+    page.fill("#new-user-name", "Recrue E2E")
+    page.click("#create-user")
+    row = page.locator("#users-table tbody tr", has_text="recrue.e2e@example.invalid")
+    row.wait_for()
+    assert "Actif" in row.inner_text()
+    row.get_by_role("button", name="Désactiver").click()
+    page.locator("#users-table tbody tr", has_text="recrue.e2e@example.invalid").get_by_role("button", name="Réactiver").wait_for()
+    # intégrité du journal : chaîne intègre, tête affichée pour consignation hors base
+    page.click("#audit-verify")
+    page.locator("#audit-result .alert.ok", has_text="Chaîne intègre").wait_for()
+    assert re.search(r"[0-9a-f]{64}", page.inner_text("#audit-result"))
+    # le dernier administrateur actif ne peut pas se retirer : l'erreur est expliquée
+    me = page.locator("#users-table tbody tr", has_text="admin.demo@example.invalid")
+    me.get_by_role("button", name="Désactiver").click()
+    page.locator(".toast.err", has_text="dernier administrateur").wait_for()
+    # un changement de rôle refusé par le serveur ne laisse pas le menu sur la valeur refusée
+    me.locator("select").select_option("talent_manager")
+    page.locator(".toast.err", has_text="dernier administrateur").nth(1).wait_for()
+    page.locator("#users-table tbody tr", has_text="admin.demo@example.invalid").locator("select").wait_for()
+    assert page.locator("#users-table tbody tr", has_text="admin.demo@example.invalid").locator("select").input_value() == "admin"
+    assert "secret" not in page.inner_text("#admin-status").lower()
+    _shot(page, "admin")
+    assert not [p for p in problems if "Content Security Policy" in p or "pageerror" in p], problems
+    ctx.close()

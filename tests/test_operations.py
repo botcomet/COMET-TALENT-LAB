@@ -218,3 +218,17 @@ def test_rate_limit_window_slides(monkeypatch):
     now[0] = 61.0
     run()
     assert sent[-1] == "ok", "la fenêtre est glissante : après 60 s l'accès est rétabli"
+
+
+def test_every_variable_documented_in_env_example_is_a_real_setting():
+    """Le fichier d'exemple ne doit jamais dériver du code : une variable inconnue serait silencieusement ignorée en production."""
+    import re
+    from pathlib import Path
+    from talentlab.config import Settings
+    text = (Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    names = set(re.findall(r"^#?\s*TALENTLAB_([A-Z0-9_]+)=", text, flags=re.M))
+    fields = {f.upper() for f in Settings.model_fields}
+    assert names, "aucune variable détectée"
+    assert not names - fields, f"variables inconnues : {sorted(names - fields)}"
+    # les réglages d'exploitation introduits en V1.1 sont bien documentés
+    assert {"MAINTENANCE_INTERVAL_HOURS", "RETENTION_AUTO_PURGE", "AUDIT_HEAD_PATH", "RATE_LIMIT_ENABLED", "RATE_LIMIT_HEAVY_PER_MINUTE"} <= names

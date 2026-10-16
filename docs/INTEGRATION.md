@@ -8,7 +8,7 @@ Principe : Talent Lab **ne reconstruit pas** ce qui existe déjà chez Comet. Il
 | `comet-ai-office` | **Non branché.** Audité (voir AUDIT_COMET.md) | Décision Tech : remplacer son scoring/booléens par des appels à l'API Talent Lab |
 | DT Editor | **Introuvable** dans les dépôts accessibles ; export JSON prêt (`comet.talentlab.dt-export/v1`), **non consommé par un vrai DT Editor** | Valider le format avec les concepteurs de DT Editor |
 | Turnover | **Aucune connexion.** Profil de plateforme 250 caractères, `syntax_confirmed=False` | Tester les requêtes générées sur Turnover avec un recruteur ; confirmer opérateurs, guillemets, jokers, limite réelle |
-| Boond / BigQuery | **Non utilisé** (aucun projet BigQuery configuré dans la session, Boond sandbox non connecté) | Définir si la mission est lue depuis Boond ; aujourd'hui le brief est collé ou téléversé |
+| Boond / BigQuery | **Volontairement non relié** (décision du 16 octobre 2026 : aucune liaison avec Boond dans cette phase ; aucune lecture, aucune écriture, aucun identifiant Boond stocké) | Quand la liaison sera autorisée : définir lecture seule ou écriture, périmètre, identifiant de référence. Aujourd'hui le brief est collé ou importé depuis un fichier (PDF, Word, texte) |
 | Granola / Noota (transcriptions) | **Non connectés.** Le texte collé est accepté (`transcription`, marqué « à vérifier ») | Importer automatiquement ; garder le plafond « partiel » tant que non validé |
 | Constellation (identité visuelle) | Conventions de couleurs/typographie reprises à la main ; **aucune dépendance** | Remplacer par la bibliothèque commune si Tech le souhaite |
 | Fournisseur d'IA | Interface + fournisseur Anthropic **écrits, jamais appelés en réel** ; désactivé par défaut | Autorisation de coût et de traitement de données ; contrat de sous-traitance ; essai sur données fictives |
@@ -59,7 +59,7 @@ Garanties vérifiées par test (`test_acceptance_export_for_dt_editor_is_anonymi
 ## 3. Brancher Talent Lab sur `comet-ai-office` (proposition)
 
 1. `analyzeCandidate` / `buildBooleanStrategies` appellent `POST /api/missions/{id}/searches/generate` et `…/candidates/{cid}` de Talent Lab (service à service, secret partagé).
-2. Les missions sont créées côté Talent Lab à partir du brief Boond ; l'identifiant Boond est stocké comme référence externe (champ à ajouter, absent aujourd'hui).
+2. *(Différé — pas de liaison Boond pour le moment.)* Plus tard, les missions pourraient être créées côté Talent Lab à partir du brief Boond, l'identifiant Boond étant stocké comme référence externe (champ à ajouter, absent aujourd'hui). D'ici là, la création reste manuelle : brief collé ou fichier importé.
 3. Les recherches Turn restent exécutées par `comet-ai-office` ; Talent Lab ne reçoit que le retour (volume, pertinence).
 4. Prérequis : recette sur données autorisées, décision de Tech sur la propriété du code, adaptateur Python dans la CI de sécurité (voir AUDIT_COMET.md §5).
 
@@ -68,5 +68,8 @@ Garanties vérifiées par test (`test_acceptance_export_for_dt_editor_is_anonymi
 - **File de tâches durable** pour l'analyse des CV (aujourd'hui : pool de threads du processus + reprise au redémarrage).
 - **Stockage des fichiers** : les CV sont stockés chiffrés en base ; un coffre objet chiffré serait préférable au-delà de quelques centaines de documents.
 - **Sauvegardes** de la base *et* de la clé de chiffrement, séparément.
+- **Migrations** : `python -m talentlab.manage migrate` (Alembic, baseline `0001` = les 19 tables) ; en production l'application **refuse de démarrer** si le schéma n'est pas à la dernière révision. Les migrations sont testées sur SQLite et sur PostgreSQL 16 ; toute évolution du modèle exige une nouvelle révision.
+- **Maintenance planifiée** (désactivée par défaut) : `TALENTLAB_MAINTENANCE_INTERVAL_HOURS` > 0 avec `TALENTLAB_RETENTION_AUTO_PURGE` et/ou `TALENTLAB_AUDIT_HEAD_PATH`. La purge est **irréversible** et ne doit être activée qu'après validation du DPO ; le fichier de tête d'audit doit être répliqué **hors de la base**. Les mêmes opérations sont disponibles à la main (écran Administration, ligne de commande `purge`, `audit-head`).
+- **Limitation de débit** par utilisateur (600 requêtes/min, 20/min pour les opérations lourdes) : garde-fou applicatif en plus de celui de la passerelle ; état en mémoire du processus (non partagé entre instances).
 - **Journalisation** applicative vers la pile d'observabilité Comet, sans contenu de CV (déjà garanti pour le journal d'audit ; à vérifier pour les journaux du serveur HTTP).
 - **Empaquetage** (image conteneur, CI, scan de dépendances Python) : **non réalisé et non vérifié** dans cette version.

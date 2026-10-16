@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import update, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .. import audit
@@ -41,6 +41,9 @@ def _latest_search(db: Session, m: Mission, search_id: str | None) -> Search | N
         s = db.get(Search, search_id)
         return s if s and s.mission_id == m.id else None
     return db.scalar(select(Search).where(Search.mission_id == m.id, Search.strategy.in_(("balanced", "strict"))).order_by(Search.created_at.desc()).limit(1))
+
+
+_MONTHS = "janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre"
 
 
 def handle(db: Session, user: User, m: Mission, level: str, message: str, *, candidate_ids: list[str] | None = None, search_id: str | None = None) -> dict[str, Any]:
@@ -89,7 +92,11 @@ def handle(db: Session, user: User, m: Mission, level: str, message: str, *, can
         gaps = [x for x in r["criteria"] if x["level"] != "confirme_demontre"]
         gaps.sort(key=lambda x: -(x["weight"] - x["points"]))
         top = ", ".join(f"« {x['label']} » ({x['points']}/{x['weight']}, {x['level'].replace('_', ' ')})" for x in gaps[:3])
-        reply["reply"] = (f"{c.ref} — score documenté {r['score_documented']}/100 (potentiel à confirmer {r['score_potential']}) sur la grille v{r['grid_version']}. {r['summary']}\n"
+        cited = [float(n) for n in re.findall(r"(?<![\w-])(\d{2,3})(?![\w-])(?!\s*(?:jours?|j\b|ans?\b|mois|annees?|semaines?|heures?|h\b|k\b|keur|euros?|€|" + _MONTHS + r"))", re.sub(r"c-\d+", " ", f)) if 0 < float(n) <= 100]
+        mismatch = (f"Attention : tu évoques {cited[0]:g} ; le score documenté ACTUEL de {c.ref} est {r['score_documented']} "
+                    f"(version d'évaluation {a.version} — il a pu changer après une réévaluation ou une nouvelle information). Voici l'explication du score actuel.\n"
+                    if cited and abs(cited[0] - r["score_documented"]) > 0.5 else "")
+        reply["reply"] = mismatch + (f"{c.ref} — score documenté {r['score_documented']}/100 (potentiel à confirmer {r['score_potential']}) sur la grille v{r['grid_version']}. {r['summary']}\n"
                           f"Ce qui coûte le plus de points : {top}.\n" + "\n".join(coach.explain_criterion(x) for x in gaps[:2]))
         reply["data"] = {"candidate": c.ref, "assessment_id": a.id}
         return reply
@@ -159,12 +166,55 @@ def handle(db: Session, user: User, m: Mission, level: str, message: str, *, can
         reply["proposals"].append(p)
         return reply
 
+    # 6 bis. « Résume la mission / où en est-on ? »
+    if re.search(r"resume|resumer|ou en est|etat de la mission|point sur la mission|synthese de la mission", f):
+        reqs, _c = ms.effective(db, m.id)
+        by_cat: dict[str, int] = {}
+        for r in reqs:
+            by_cat[r.category.value] = by_cat.get(r.category.value, 0) + 1
+        frozen = ms.latest_frozen(db, m.id)
+        rows = [mt.candidate_brief(db, c) for c in db.scalars(select(Candidate).where(Candidate.mission_id == m.id))]
+        tiers: dict[str, int] = {}
+        for r in rows:
+            if r.get("assessment"):
+                tiers[r["assessment"]["tier"]] = tiers.get(r["assessment"]["tier"], 0) + 1
+        pending = db.scalar(select(func.count(Proposal.id)).where(Proposal.mission_id == m.id, Proposal.status == "pending")) or 0
+        missing = [x["field"] for x in (m.analysis or {}).get("missing_info", [])]
+        nsearch = db.scalar(select(func.count(Search.id)).where(Search.mission_id == m.id)) or 0
+        lines = [f"Mission « {m.title} » — grille {'v' + str(frozen.version) + ' figée' if frozen else 'non figée'}.",
+                 "Exigences : " + (", ".join(f"{n} {k.replace('_', ' ')}" for k, n in by_cat.items()) or "aucune") + ".",
+                 f"Recherches : {nsearch}. Candidats : {len(rows)}" + (" (" + ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in tiers.items()) + ")" if tiers else "") + ".",
+                 f"Propositions en attente de décision : {pending}."]
+        if missing:
+            lines.append("Informations encore à obtenir du client : " + ", ".join(missing[:8]) + ".")
+        if not frozen:
+            lines.append("Prochaine étape : valider les exigences puis figer la grille avant d'évaluer des CV.")
+        reply["reply"] = "\n".join(lines)
+        reply["data"] = {"requirements": by_cat, "tiers": tiers, "pending_proposals": pending}
+        return reply
+
+    # 6 ter. « Quels profils écarter ? » — l'application n'écarte JAMAIS : elle montre les plus éloignés du besoin, la décision reste humaine et motivée
+    if re.search(r"ecart(er|e)|eliminer|rejeter|abandonner|laisser tomber|moins bons?", f):
+        rows = [mt.candidate_brief(db, c) for c in db.scalars(select(Candidate).where(Candidate.mission_id == m.id))]
+        rows = [r for r in rows if r.get("assessment") and r["assessment"]["tier"] in ("ecart_majeur", "adequation_faible")]
+        rows.sort(key=lambda r: r["assessment"]["score_documented"])
+        head = "L'application n'écarte jamais un profil : c'est une décision humaine, motivée et réversible (statut « écarté » avec un motif)."
+        if not rows:
+            reply["reply"] = head + "\nAucun profil n'est en « écart majeur » ou en « adéquation faible » pour l'instant."
+        else:
+            reply["reply"] = head + "\nProfils les plus éloignés du besoin, à examiner avant toute décision :\n" + "\n".join(
+                f"- {r['ref']} : {r['assessment']['score_documented']}/100 (potentiel {r['assessment']['score_potential']}), {r['assessment']['tier'].replace('_', ' ')}"
+                + (f" — impératifs non confirmés : {', '.join(r['assessment']['open_mandatory'])}" if r["assessment"]["open_mandatory"] else "") for r in rows)
+        reply["data"] = {"profiles": [r["ref"] for r in rows]}
+        return reply
+
     # 7. « Quels profils restent intéressants ? »
     if re.search(r"restent? interessant|quels profils|meilleurs? (profils|candidats)|qui (garder|presenter)", f):
         rows = [mt.candidate_brief(db, c) for c in db.scalars(select(Candidate).where(Candidate.mission_id == m.id))]
         rows = [r for r in rows if r.get("assessment")]
         keep = [r for r in rows if r["assessment"]["tier"] in ("tres_interessant", "interessant") or (r["assessment"]["tier"] == "a_qualifier" and r["assessment"]["score_potential"] >= 80)]
-        keep.sort(key=lambda r: -r["assessment"]["score_documented"])
+        from ..domain.scoring import rank_key
+        keep.sort(key=lambda r: rank_key(r["assessment"]["open_mandatory"], 1 if r["assessment"]["tier"] == "ecart_majeur" else 0, r["assessment"]["score_documented"], r["assessment"]["score_potential"]))
         if not keep:
             reply["reply"] = "Aucun profil n'atteint le niveau « intéressant » ou « à qualifier avec potentiel ». Aucun n'est rejeté : tous restent consultables et réévaluables."
         else:

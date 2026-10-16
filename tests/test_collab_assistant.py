@@ -399,7 +399,6 @@ def test_null_provider_is_explicit():
         NullProvider().complete_json("s", "u")
 
 
-@pytest.mark.sqlite_only
 def test_simultaneous_confirmations_of_one_proposal_apply_it_exactly_once(tm, app):
     """Course critique : « une proposition ne s'applique qu'une fois » doit tenir sous requêtes simultanées (réservation atomique)."""
     from concurrent.futures import ThreadPoolExecutor
@@ -466,3 +465,81 @@ def test_deleting_a_candidate_erases_its_documents_text_and_file(tm):
     r = upload(s, mid, [("b.txt", C.CV_TLJ_B.encode())])
     docs = s.get(f"/api/missions/{mid}/documents").json()
     assert docs[0]["status"] == "done", "le même CV peut être ré-importé : plus de faux « doublon » d'un candidat effacé"
+
+
+# =============================================================================== assistant : résumé, « écarter », score cité
+def test_assistant_summarises_the_mission_from_real_state(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("a.txt", C.CV_TLJ_A.encode()), ("b.txt", C.CV_TLJ_B.encode())])
+    s.post(f"/api/missions/{mid}/searches/generate")
+    r = s.post(f"/api/missions/{mid}/assistant", json={"message": "Résume la mission"}).json()
+    assert "grille v1 figée" in r["reply"] and "Candidats : 2" in r["reply"] and "Recherches : 3" in r["reply"]
+    assert r["data"]["pending_proposals"] == 0 and r["data"]["requirements"]
+    assert sum(r["data"]["tiers"].values()) == 2, "chaque candidat évalué apparaît dans exactement un palier"
+    # une proposition en attente est comptée, pas appliquée
+    s.post(f"/api/missions/{mid}/assistant", json={"message": "Le client vient de préciser que Avro est impératif"})
+    r2 = s.post(f"/api/missions/{mid}/assistant", json={"message": "Où en est-on sur cette mission ?"}).json()
+    assert r2["data"]["pending_proposals"] == 1
+
+
+def test_assistant_summary_on_a_mission_without_frozen_grid_says_what_is_next(tm):
+    s = tm(1)
+    m = create_mission(s)
+    r = s.post(f"/api/missions/{m['id']}/assistant", json={"message": "Fais une synthèse de la mission"}).json()
+    assert "non figée" in r["reply"] and "figer la grille" in r["reply"] and "Candidats : 0" in r["reply"]
+
+
+def test_assistant_never_discards_it_lists_the_furthest_profiles_for_a_human_decision(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("a.txt", C.CV_TLJ_A.encode()), ("c.txt", C.CV_INFRA_ENV.encode()), ("d.txt", C.CV_TLJ_C_DECLARED.encode()), ("e.txt", C.CV_WMS_NOREFLEX.encode())])
+    cands = s.get(f"/api/missions/{mid}/candidates").json()
+    far = sorted(c["ref"] for c in cands if c["assessment"]["tier"] in ("ecart_majeur", "adequation_faible"))
+    near = sorted(c["ref"] for c in cands if c["assessment"]["tier"] not in ("ecart_majeur", "adequation_faible"))
+    assert far and near, "le jeu d'essai doit contenir des profils éloignés ET des profils proches"
+    r = s.post(f"/api/missions/{mid}/assistant", json={"message": "Quels profils dois-je écarter ?"}).json()
+    assert "n'écarte jamais" in r["reply"] and r["proposals"] == []
+    assert all(c["status"] != "ecarte" for c in s.get(f"/api/missions/{mid}/candidates").json()), "aucun statut n'a changé"
+    assert sorted(r["data"]["profiles"]) == far, "seuls les profils en écart majeur / adéquation faible sont listés"
+    assert not set(r["data"]["profiles"]) & set(near)
+    scores = [next(c for c in cands if c["ref"] == ref)["assessment"]["score_documented"] for ref in r["data"]["profiles"]]
+    assert scores == sorted(scores), "du plus éloigné au moins éloigné"
+
+
+def test_assistant_flags_a_cited_score_that_differs_from_the_current_documented_score(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("a.txt", C.CV_TLJ_A.encode())])
+    c = s.get(f"/api/missions/{mid}/candidates").json()[0]
+    real = c["assessment"]["score_documented"]
+    wrong = 99 if abs(real - 99) > 1 else 11
+    r = s.post(f"/api/missions/{mid}/assistant", json={"message": f"Pourquoi {c['ref']} a-t-il {wrong} ?"}).json()
+    assert r["reply"].startswith("Attention") and f"{real:g}" in r["reply"] and f"{wrong}" in r["reply"]
+    ok = s.post(f"/api/missions/{mid}/assistant", json={"message": f"Pourquoi {c['ref']} a-t-il {real:g} ?"}).json()
+    assert not ok["reply"].startswith("Attention"), "aucune alerte quand le chiffre cité est le vrai"
+    nothing = s.post(f"/api/missions/{mid}/assistant", json={"message": f"Pourquoi as-tu donné ce score à {c['ref']} ?"}).json()
+    assert not nothing["reply"].startswith("Attention"), "la référence « c-12 » ne doit pas être prise pour un score"
+
+
+def test_assistant_interesting_profiles_never_put_an_open_mandatory_before_a_fully_confirmed_one(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("a.txt", C.CV_TLJ_A.encode()), ("b.txt", C.CV_TLJ_B.encode()), ("d.txt", C.CV_TLJ_C_DECLARED.encode())])
+    cands = {c["ref"]: c["assessment"] for c in s.get(f"/api/missions/{mid}/candidates").json()}
+    r = s.post(f"/api/missions/{mid}/assistant", json={"message": "Quels profils restent intéressants ?"}).json()
+    opens = [len(cands[ref]["open_mandatory"]) for ref in r["data"]["profiles"]]
+    assert opens == sorted(opens), "ordre : impératifs non confirmés croissants avant le score"
+
+
+def test_assistant_does_not_mistake_a_date_or_a_duration_for_a_cited_score(tm):
+    s = tm(1)
+    mid = setup_tlj(s)
+    upload(s, mid, [("a.txt", C.CV_TLJ_A.encode())])
+    c = s.get(f"/api/missions/{mid}/candidates").json()[0]
+    for msg in (f"Pourquoi {c['ref']} a ce score, vu le 15 octobre ?", f"Pourquoi {c['ref']} a ce score avec 12 ans d'expérience ?", f"Explique le score de {c['ref']} sur 90 jours"):
+        r = s.post(f"/api/missions/{mid}/assistant", json={"message": msg}).json()
+        assert not r["reply"].startswith("Attention"), msg
+    # en revanche un score cité avec « % » reste comparé
+    wrong = 99 if abs(c["assessment"]["score_documented"] - 99) > 1 else 11
+    assert s.post(f"/api/missions/{mid}/assistant", json={"message": f"Pourquoi {c['ref']} a {wrong}% ?"}).json()["reply"].startswith("Attention")

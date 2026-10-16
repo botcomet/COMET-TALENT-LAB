@@ -100,7 +100,7 @@ export async function copyText(text) {
 // Rien n'est conservé côté serveur ; une extraction qui échoue est expliquée, jamais silencieuse.
 export function fileImporter(target, { max = 30000, label = 'Importer un fichier (PDF, Word ou texte)' } = {}) {
   const status = h('div', { 'aria-live': 'polite' });
-  const input = h('input', { type: 'file', accept: '.pdf,.docx,.txt,.md,.eml', 'aria-label': label });
+  const input = h('input', { type: 'file', accept: '.pdf,.docx,.txt,.md', 'aria-label': label });
   input.addEventListener('change', async () => {
     const f = input.files[0];
     if (!f) return;

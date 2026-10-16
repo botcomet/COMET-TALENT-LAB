@@ -1,4 +1,4 @@
-# Recette : état exact au 8 octobre 2026
+# Recette : état exact au 16 octobre 2026
 
 Ce document répond à la consigne « si tu ne peux pas tout réaliser, donne l'état exact : code réalisé, tests exécutés, travail restant ». Tout ce qui est marqué **testé** a été exécuté dans l'environnement de développement avec des données **fictives**. Ce qui n'a pas été exécuté est dit.
 
@@ -11,12 +11,17 @@ Ce document répond à la consigne « si tu ne peux pas tout réaliser, donne l'
 | Matching, preuves, scoring, qualification | `tests/test_matching_business.py` | 51 | domaine pur |
 | **Banc adverse du moteur de preuves** (revue méthodologique) | `tests/test_adversarial_evidence.py` | 115 | domaine pur |
 | API de bout en bout, chiffrement, audit, import, export | `tests/test_api_flow.py` | 29 | SQLite ; rejouée sur PostgreSQL 16 |
-| Collaboration, bibliothèque, assistant, coach, IA vérifiée | `tests/test_collab_assistant.py` | 26 | SQLite ; rejouée sur PostgreSQL 16 |
-| **Durcissement de sécurité** (revue de sécurité) | `tests/test_security_hardening.py` | 29 | SQLite ; rejouée sur PostgreSQL 16 |
-| Parcours navigateur réel (Chromium via Playwright) | `tests/test_e2e_browser.py` | 3 | SQLite, serveur uvicorn réel |
-| **Total** | | **331** | **331 réussis, 0 échec** (≈ 60 s) |
+| Collaboration, bibliothèque, assistant, coach, IA vérifiée | `tests/test_collab_assistant.py` | 32 | SQLite ; rejouée sur PostgreSQL 16 |
+| **Durcissement de sécurité** (revue de sécurité) + import de descriptif | `tests/test_security_hardening.py` | 35 | SQLite ; rejouée sur PostgreSQL 16 |
+| **Dossier au format Comet** | `tests/test_dossier_comet.py` | 10 | domaine pur + API |
+| **Exploitation** : migrations, maintenance planifiée, limitation de débit, `.env.example` | `tests/test_operations.py` | 13 | SQLite ; PostgreSQL 16 pour la migration |
+| **Historique transverse et administration** | `tests/test_history_admin.py` | 10 | SQLite ; rejouée sur PostgreSQL 16 |
+| Parcours navigateur réel (Chromium via Playwright) | `tests/test_e2e_browser.py` | 6 | SQLite, serveur uvicorn réel |
+| **Total** | | **379** | **378 réussis, 1 ignoré** (migration PostgreSQL, rejouée à part), 0 échec (≈ 72 s) |
 
-Sur PostgreSQL 16 : `test_api_flow`, `test_collab_assistant`, `test_security_hardening` rejoués (82 réussis, 1 ignoré car propre au fichier SQLite) ; le test « aucune donnée en clair dans aucune ligne » tourne sur les deux moteurs. 37 tests portent le marqueur `business` (cas métier issus du référentiel).
+Sur PostgreSQL 16 (cluster local, base jetable) : `test_api_flow`, `test_collab_assistant`, `test_security_hardening`, `test_operations`, `test_history_admin` rejoués — **118 réussis, 1 ignoré** (vérification propre au fichier SQLite) ; la migration est comparée au modèle sur PostgreSQL ; le test « aucune donnée en clair dans aucune ligne » tourne sur les deux moteurs. 37 tests portent le marqueur `business` (cas métier issus du référentiel).
+
+> Le code de sortie de la suite complète est **0** ; il est lu directement (et non via un filtre qui le masquerait : une validation précédente avait été commitée avec un test en échec pour cette raison, corrigée depuis).
 
 ## 2. Deux revues indépendantes — et ce qu'elles ont changé
 
@@ -48,12 +53,24 @@ La première tentative a échoué sur une limite de débit ; je l'ai relancée s
 
 Également corrigés (trouvés avec l'aide des journaux de la première tentative, puis reproduits) : regex quadratiques sur espaces Unicode, budget de temps par document, profondeur booléenne bornée, course sur la confirmation d'une proposition (appliquée 10 fois sous 10 requêtes simultanées), citation « éliminatoire » non traçable, seuils de grille non bornés, suppression d'un candidat laissant son document, gouvernance de la bibliothèque, visibilité des cas de non-régression, nettoyage des coordonnées à l'export.
 
+### 2.3 Évolutions V1.1 (16 octobre 2026) — **aucune liaison Boond, aucune donnée réelle, aucun déploiement**
+| Évolution | Vérification |
+|---|---|
+| Import du descriptif client par fichier (PDF, Word, texte) : le texte revient au navigateur pour relecture, le fichier n'est pas conservé | API + navigateur (fichier Word réel, fichier illisible expliqué) |
+| Export du dossier au format de structuration Comet (phrases du CV rangées mot pour mot, aucune technologie ajoutée, client ≠ interne), téléchargeable | `test_dossier_comet.py` + navigateur |
+| Migrations Alembic ; démarrage refusé en production sur un schéma non à jour | `test_operations.py` (SQLite, PostgreSQL) |
+| Maintenance planifiée (purge, tête d'audit consignée), **désactivée par défaut** ; limitation de débit par utilisateur | `test_operations.py` (horloge et fil simulés) |
+| Assistant : résumé de mission, « quels profils écarter ? » (liste sans jamais écarter), alerte quand le score cité ≠ score actuel, ordre « impératifs d'abord » | `test_collab_assistant.py` |
+| Écran d'administration (comptes, état, purge avec prévisualisation, vérification d'audit) ; historique transverse | `test_history_admin.py` + 2 parcours navigateur |
+
+Défauts trouvés **par mes tests ou ma propre relecture** pendant cette phase, corrigés : (1) l'entrée « Historique » faisait **déborder la barre de navigation de 84 px sur mobile** (test de bout en bout) ; (2) un menu « Rôle » restait sur une valeur refusée par le serveur (relecture ; vérifié ensuite par un test navigateur) ; (3) l'alerte « score cité » prenait « le 15 octobre » ou « 12 ans » pour un score ; (4) la création de compte acceptait une adresse sans forme d'adresse ; (5) un marqueur de test `sqlite_only` sans effet laissait croire qu'un test était exclu de PostgreSQL. **Je n'ai pas relancé de revue indépendante sur ces évolutions** : seule ma propre relecture adverse a eu lieu.
+
 ## 3. Critères d'acceptation (§28) — « je dois pouvoir »
 
 | # | Critère | Preuve |
 |---|---|---|
 | 1 | Créer une mission | `test_acceptance_mission_requirements_grid_and_searches` ; navigateur |
-| 2 | Importer le descriptif client | idem (brief collé, source immuable) |
+| 2 | Importer le descriptif client | idem (brief collé, source immuable) ; import PDF / Word / texte : `test_a_brief_can_be_imported_from_pdf_docx_and_text_without_storing_the_file` + navigateur |
 | 3 | Ajouter des précisions issues d'un appel | idem (source tracée, remplacement jamais implicite) |
 | 4 | Consulter et corriger les critères extraits | idem ; navigateur |
 | 5 | Valider une grille de scoring | idem (100 points, empreinte, gel ; paramètres bornés) |
@@ -71,9 +88,9 @@ La première tentative a échoué sur une limite de débit ; je l'ai relancée s
 | 17 | Notes d'appel candidat | idem ; `test_business_6_…`, `test_business_9_…` |
 | 18 | Actualiser les évaluations | idem (réévaluation, ancienne version conservée) |
 | 19 | Changements et raisons | idem (diff critère par critère) |
-| 20 | Historique de la mission | idem (`/history`, audit chaîné et signé) ; navigateur |
+| 20 | Historique de la mission | idem (`/history`, audit chaîné et signé) ; navigateur ; **historique transverse** : `test_history_*` + navigateur |
 | 21 | Partager une recherche avec un collègue | `test_business_15_…` ; navigateur à deux utilisateurs ; notes masquées au niveau « stratégie » |
-| 22 | Exporter une synthèse pour DT Editor | `test_acceptance_export_for_dt_editor_is_anonymised_faithful_and_sourced` — **format** vérifié ; **consommation par DT Editor non vérifiée** (introuvable) |
+| 22 | Exporter une synthèse pour DT Editor | `test_acceptance_export_for_dt_editor_is_anonymised_faithful_and_sourced`, `test_dossier_comet.py` — **format** vérifié ; **consommation par DT Editor non vérifiée** (introuvable) |
 
 > « Le produit doit fonctionner de bout en bout dans un environnement autorisé » : il fonctionne de bout en bout **en développement, sur données fictives**. **Aucun environnement Comet autorisé n'a été utilisé** ; il n'y a eu aucun déploiement.
 
@@ -86,16 +103,20 @@ Les 15 sont implantés et passent. Tableau détaillé dans [METHODOLOGIE_MAPPING
 |---|---|
 | Données réelles de candidats, de clients, de missions | **Aucune utilisée.** Fixtures fictives en noms de code |
 | Déploiement, conteneur, CI | **Aucun.** Pas de Dockerfile ni de workflow ; l'adaptateur Python de la CI de sécurité Comet n'existe pas ; aucun scan de dépendances exécuté |
-| **Migrations de base** | **Aucun outil de migration** (pas d'Alembic) : les colonnes ajoutées pendant les revues (chiffrement, `session_epoch`, `attempts`, `candidate_id`) imposent de **recréer la base de développement**. À traiter avant toute base à conserver |
+| **Migrations de base** | **Alembic en place** (baseline `0001`, 19 tables), comparée au modèle sur SQLite et PostgreSQL, retour arrière et rejeu testés. **Jamais jouée sur une base contenant des données réelles** ; aucune migration d'évolution n'a encore été nécessaire ; sauvegarde avant migration à prévoir |
 | Syntaxe réelle de Turnover | **Non confirmée** (`syntax_confirmed=False`) ; requêtes jamais exécutées sur Turnover. « Trop large / trop restrictif » vient du retour saisi par le recruteur, jamais d'une estimation |
 | Fournisseur d'IA (Anthropic) | Code écrit, **jamais appelé en réel** ; la vérification par citation est testée avec un faux fournisseur |
 | SSO Comet réel | Contrat de passerelle testé avec une passerelle **simulée** ; comportement réel sur en-têtes dupliqués, limite de corps, joignabilité directe : **non vérifiable** ici |
-| Boond / BigQuery / Drive / Notion / Granola / Noota / DT Editor / Turn | **Aucun accès utilisé** |
+| **Boond / BigQuery** | **Volontairement non reliés** (décision du 16 octobre 2026) : ni lecture, ni écriture, aucun identifiant Boond dans le code |
+| Drive / Notion / Granola / Noota / DT Editor / Turn | **Aucun accès utilisé** |
 | OCR, audio | **Non supportés** : échec explicite pour un PDF sans couche texte |
 | Pertinence métier sur de vraies populations | **Non mesurée** (ni précision, ni rappel). Les règles de portée sont des motifs lexicaux FR/EN ; seuils et facteurs = valeurs de départ défendues par des cas, **non calibrées** |
 | Extrapolation des attaques par fichier | Mesures faites à petite échelle sous plafond mémoire ; le cas qui saturerait 16 Go n'a pas été exécuté |
 | File de tâches durable multi-instances | **Non réalisée** : pools de threads par utilisateur dans le processus ; reprise au redémarrage limitée à 2 tentatives par document |
-| Limitation de débit (requêtes/minute) | **Non réalisée** : à placer sur la passerelle |
+| Limitation de débit (requêtes/minute) | **Réalisée dans l'application** (par utilisateur, en mémoire du processus, testée avec horloge simulée) ; **non testée sous charge réelle**, non partagée entre instances ; limitation par adresse à placer sur la passerelle |
+| Maintenance planifiée (purge, tête d'audit) | Code et tests avec fil et horloge simulés ; **jamais exécutée en service**, **désactivée par défaut** ; la purge attend la validation de la durée par le DPO ; la **réplication hors base** du fichier de tête d'audit relève de l'infrastructure |
+| Écran d'administration, historique transverse | Testés (API + navigateur Chromium). **Aucun audit d'accessibilité** ; l'historique parcourt toutes les missions accessibles à chaque requête (acceptable pour quelques dizaines de missions, **non mesuré** au-delà) |
+| Assistant | Questions **fermées** (motifs lexicaux FR), pas un dialogue libre : une formulation hors des intentions prévues reçoit une réponse d'aide, pas une réponse inventée |
 | Gestion/rotation de la clé de chiffrement, sauvegardes | **Non réalisées** (clé unique ; une rotation de clé invalide aussi la chaîne d'audit signée) |
 | Détection d'injection de prompt | Détection **consultative** : une formulation inédite ou un texte blanc passent (le scoring déterministe n'« obéit » pas au document, mais l'alerte peut manquer) |
 | Cas de référence cybersécurité O+O, QA e-commerce | Brief et lexique couverts ; pas de CV de référence dédié |

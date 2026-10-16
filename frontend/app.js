@@ -1,6 +1,8 @@
 import { $, api, ApiError, clear, copyText, field, fileImporter, guard, h, toast, fmtDate, chip } from './lib.js';
 import { renderMission, stopPolling } from './mission.js';
 import { renderAssistant } from './assistant.js';
+import { renderHistory } from './history.js';
+import { renderAdmin } from './admin.js';
 
 const state = { user: null, config: null };
 export { state };
@@ -43,7 +45,8 @@ function shell() {
   top.append(
     h('a', { class: 'brand', href: '#/' }, 'Comet', h('b', {}, 'Talent Lab')),
     h('nav', { 'aria-label': 'Navigation principale' },
-      h('a', { href: '#/missions' }, 'Mes missions'), h('a', { href: '#/shared' }, 'Missions partagées'), h('a', { href: '#/library' }, 'Bibliothèque Talent'), h('a', { href: '#/coach' }, 'Talent Coach')),
+      h('a', { href: '#/missions' }, 'Mes missions'), h('a', { href: '#/shared' }, 'Missions partagées'), h('a', { href: '#/history' }, 'Historique'), h('a', { href: '#/library' }, 'Bibliothèque Talent'), h('a', { href: '#/coach' }, 'Talent Coach'),
+      state.user.role === 'admin' ? h('a', { href: '#/admin' }, 'Administration') : null),
     h('span', { class: 'spacer' }),
     h('span', { id: 'whoami' }, state.user.display_name),
     h('button', { class: 'small', onclick: () => guard(async () => { await api('/auth/logout', { method: 'POST' }); location.hash = ''; location.reload(); }) }, 'Déconnexion'));
@@ -67,6 +70,8 @@ async function route() {
     if (view === 'missions') return missionList(main, 'mine');
     if (view === 'shared') return missionList(main, 'shared');
     if (view === 'new') return newMission(main);
+    if (view === 'history') return renderHistory(main, parts[1] ? decodeURIComponent(parts[1]) : '');
+    if (view === 'admin') return state.user.role === 'admin' ? renderAdmin(main, state.user) : main.append(h('p', {}, 'Accès réservé aux administrateurs.'));
     if (view === 'library') return library(main);
     if (view === 'coach') return coach(main);
     if (view === 'mission' && parts[1]) return renderMission(main, parts[1], parts[2] || 'needs', parts[3]);
@@ -84,6 +89,7 @@ function home(main) {
       tile('Nouvelle mission', 'Coller le brief, ajouter les précisions, valider les critères.', '#/new'),
       tile('Mes missions', 'Reprendre vos missions : recherches, CV, qualifications.', '#/missions'),
       tile('Missions partagées', 'Missions ou stratégies de sourcing partagées par un collègue.', '#/shared'),
+      tile('Historique', 'Retrouver une mission, une exigence ou une requête déjà rencontrée.', '#/history'),
       tile('Bibliothèque Talent', 'Enseignements, méthodes de recherche et erreurs de matching.', '#/library')),
     h('div', { class: 'alert blue' }, 'Principes : le besoin client est la référence · une mention n’est pas une démonstration · un impératif non satisfait n’est jamais compensé · aucune décision automatique de rejet.'));
 }

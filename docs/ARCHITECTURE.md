@@ -13,14 +13,14 @@
 ```
 Navigateur (frontend/, JS natif, aucun build)
    │  JSON + cookie signé (dev) / en-têtes de passerelle (prod) + en-tête CSRF
-FastAPI  talentlab/api/routes.py ── schémas pydantic stricts (extra=forbid)
+FastAPI  talentlab/api/routes.py ── schémas pydantic stricts (extra=forbid) ; intergiciels : limite de corps (BodyLimit), limitation de débit (RateLimit)
    │
-services/   missions · searches · matching · export · knowledge · assistant      (orchestration, droits, audit, transactions)
+services/   missions · searches · matching · extraction · export · knowledge · assistant · history · maintenance      (orchestration, droits, audit, transactions)
    │
 domain/     brief · requirements · grid · boolean · search_plan · search_optimizer
-            cv_extract · evidence · clauses · scoring · qualification · call_facts · claims · safety · coach · lexicon
+            cv_extract · evidence · clauses · scoring · qualification · call_facts · claims · safety · coach · lexicon · dossier
    │
-SQLAlchemy 2  models.py (19 tables)  ──  SQLite (dev/tests) | PostgreSQL 16 (vérifié)
+SQLAlchemy 2  models.py (19 tables) + Alembic (migrations/, manage.py)  ──  SQLite (dev/tests) | PostgreSQL 16 (vérifié)
                 chiffrement applicatif Fernet sur les champs sensibles (EncText / EncJSON / EncBytes)
 ```
 
@@ -75,8 +75,19 @@ Un retour client propose un enseignement **spécifique au client** ; il ne devie
 ### 4.6 Garde-fous de performance et de robustesse
 Texte extrait limité (`max_chars`, 150 000) ; toute espace Unicode est repliée en espace simple (`text.fold`, longueur conservée) et les motifs de champs travaillent sur du texte compacté ; motifs ancrés et mis en cache ; au plus 300 mentions analysées par critère ; **budget de temps par document** (`analysis_timeout_s`, 60 s) : au-delà, échec explicite « timeout » sans score, sans bloquer les autres CV ; profondeur de parenthèses booléennes bornée.
 
+### 4.7 Dossier au format Comet (`domain/dossier.py`)
+Talent Lab ne rédige pas le dossier : il **range**, mot pour mot, des phrases du CV dans la structure Comet (entreprise — intitulé — dates ; contexte ; réalisations en parties thématiques ; environnement technique). Les titres de parties viennent d'un **vocabulaire fermé**, une phrase ne change jamais d'expérience, aucune technologie n'est ajoutée, une information absente reste « Non précisé dans le CV ». L'export **client** ne contient ni niveau de preuve ni provenance ; l'export **interne** les porte. Seules les compétences *confirmées* figurent parmi les compétences démontrées.
+
+### 4.8 Historique transverse (`services/history.py`)
+Recherche dans les seules missions possédées ou partagées ; le niveau de partage borne ce qui est cherché ; jamais les candidats ni les CV ; résultats et termes bornés ; texte cherché non consigné.
+
+### 4.9 Assistant (`services/assistant.py`)
+Questions fermées, réponses fondées sur l'état réel de la mission : explication d'un score (avec alerte si le chiffre cité diffère du score actuel), comparaison, résumé de mission, profils à examiner. « Quels profils écarter ? » ne produit **jamais** de rejet : l'assistant liste les profils les plus éloignés du besoin et rappelle que la décision est humaine et motivée. Toute modification passe par une proposition à confirmer.
+
 ## 5. Traitement asynchrone
 Les lots de CV sont traités par un **petit pool de threads par utilisateur** (`worker_threads_per_user`, 2), en mode `inline` pour les tests. L'extraction PDF/DOCX se fait dans un **processus enfant isolé** (`services/extraction.py` : mémoire, CPU et temps bornés, tué au-delà de `extraction_timeout_s`). Au démarrage, `requeue_stale` relance les documents restés « en cours » après un arrêt. **Limite connue :** ce n'est pas une file durable multi-instance ; pour un déploiement multi-instances il faut une vraie file de tâches (voir INTEGRATION.md).
+
+**Maintenance planifiée** (`services/maintenance.py`) : un fil léger lancé au démarrage, **désactivé par défaut**, exécute la purge de conservation (si activée) et consigne la tête de la chaîne d'audit dans un fichier (écriture atomique). Chaque passage est idempotent ; une erreur n'arrête jamais la boucle. Ce n'est pas un ordonnanceur distribué : avec plusieurs instances, chacune exécute le passage (sans danger, mais sans coordination).
 
 ## 6. Décisions et compromis assumés
 
@@ -86,4 +97,5 @@ Les lots de CV sont traités par un **petit pool de threads par utilisateur** (`
 | Lexique de compétences interne (~80 entrées) | Alias, termes voisins, ombrelles « famille de fournisseurs », volumes typiques : indispensables aux booléens et aux preuves | À enrichir et à faire valider par les recruteurs ; une compétence absente du lexique est traitée comme texte libre |
 | Pas de modèle de langage dans le scoring | Explicabilité, reproductibilité, absence de compétence inventée | Moins de souplesse sur formulations atypiques ; compensé par la désignation de passages optionnelle |
 | JS natif sans build | Surface d'attaque et chaîne d'outils minimales ; CSP stricte `default-src 'self'` | Pas de framework de composants |
-| SQLite pour dev/tests, PostgreSQL pour la production | Production refusée sur SQLite par la configuration | La suite complète n'est rejouée sur PostgreSQL que pour l'API et la collaboration |
+| SQLite pour dev/tests, PostgreSQL pour la production | Production refusée sur SQLite par la configuration | La suite complète n'est rejouée sur PostgreSQL que pour l'API, la collaboration, le durcissement et les migrations |
+| Alembic pour le schéma ; `create_all` seulement hors production | Une base à conserver ne doit jamais être « tamponnée » sans migration | Toute évolution du modèle exige une révision écrite et testée (test d'égalité modèles ↔ migrations) |

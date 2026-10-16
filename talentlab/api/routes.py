@@ -20,6 +20,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from ..security import (COOKIE, access_level, clear_session, dev_auth_allowed, current_user, issue_session, mission_dep, require_admin, require_mission)
 from ..enums_app import CANDIDATE_SOURCE_KINDS
 from ..services import assistant as asst
+from ..services import history as hist
 from ..services import export as exp
 from ..services import knowledge as kn
 from ..services import matching as mt
@@ -685,7 +686,49 @@ def regression_cases(db: Session = Depends(get_db), user: User = Depends(current
     return kn.regression_cases(db, user)
 
 
+# ----------------------------------------------------------------- historique (recherche transverse)
+@router.get("/history/search")
+def history_search(q: str = Query(..., min_length=hist.MIN_QUERY, max_length=hist.MAX_QUERY), db: Session = Depends(get_db), user: User = Depends(current_user)):
+    if not hist._terms(q):
+        raise HTTPException(422, "Saisir au moins un mot à rechercher.")
+    return hist.search(db, user, q)                      # volontairement NON consigné dans l'audit : le texte cherché peut être sensible
+
+
 # ----------------------------------------------------------------- administration
+def admin_user_dict(db: Session, u: User) -> dict[str, Any]:
+    owned = db.scalar(select(func.count(Mission.id)).where(Mission.owner_id == u.id)) or 0
+    return {**user_dict(u), "active": u.active, "created_at": u.created_at.isoformat(), "missions_owned": owned}
+
+
+@router.get("/admin/users")
+def admin_list_users(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    return [admin_user_dict(db, u) for u in db.scalars(select(User).order_by(User.active.desc(), User.display_name))]
+
+
+@router.get("/admin/status")
+def admin_status(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """État d'exploitation lisible par l'administrateur : aucune valeur secrète, aucun chemin ; ce qu'une purge supprimerait AVANT de la lancer."""
+    from datetime import date
+    s = get_settings()
+    expired = list(db.scalars(select(Document).where(Document.expires_at.is_not(None), Document.expires_at < date.today())))
+    try:
+        from .. import manage
+        revision, head = manage.current_revision(), manage.head_revision()
+    except Exception:                                   # noqa: BLE001 — l'état de schéma est informatif : ne jamais faire échouer l'écran
+        revision, head = None, ""
+    return {
+        "env": s.env, "auth_mode": s.auth_mode, "llm_provider": s.llm_provider,
+        "retention_days": s.retention_days, "retention_auto_purge": s.retention_auto_purge, "retention_note": "Durée de départ — à valider avec le DPO.",
+        "maintenance_interval_hours": s.maintenance_interval_hours,
+        "maintenance_enabled": s.maintenance_interval_hours > 0 and (s.retention_auto_purge or bool(s.audit_head_path)),
+        "audit_head_recorded_outside_db": bool(s.audit_head_path),
+        "schema": {"revision": revision, "head": head, "managed_by_migrations": revision is not None, "current": revision == head if revision is not None else None},
+        "purge_pending": {"documents": len(expired), "candidates": len({d.candidate_id for d in expired if d.candidate_id})},
+        "counts": {"users_active": db.scalar(select(func.count(User.id)).where(User.active.is_(True))) or 0,
+                   "missions": db.scalar(select(func.count(Mission.id))) or 0},
+    }
+
+
 @router.post("/admin/users", status_code=201)
 def admin_create_user(body: S.UserIn, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     email = body.email.strip().lower()
@@ -695,7 +738,7 @@ def admin_create_user(body: S.UserIn, db: Session = Depends(get_db), admin: User
     db.add(u)
     db.flush()
     audit.log(db, admin.id, "user.create", "user", u.id, role=body.role)
-    return user_dict(u)
+    return admin_user_dict(db, u)
 
 
 @router.patch("/admin/users/{uid_}")
@@ -713,7 +756,7 @@ def admin_patch_user(uid_: str, body: S.UserPatch, db: Session = Depends(get_db)
     if ch.get("active") is False:
         u.session_epoch = (u.session_epoch or 0) + 1                # toute session ouverte est révoquée
     audit.log(db, admin.id, "user.update", "user", u.id, **{k: (v if k != "display_name" else "…") for k, v in ch.items()})
-    return user_dict(u)
+    return admin_user_dict(db, u)
 
 
 @router.post("/admin/purge")
