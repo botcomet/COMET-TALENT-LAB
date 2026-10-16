@@ -39,7 +39,7 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("e2e")
     port = _free_port()
     env = {**os.environ, "TALENTLAB_ENV": "test", "TALENTLAB_AUTH_MODE": "dev", "TALENTLAB_DATABASE_URL": f"sqlite:///{tmp}/e2e.db",
-           "TALENTLAB_DATA_DIR": str(tmp / "data"), "TALENTLAB_PROCESSING_MODE": "background"}
+           "TALENTLAB_DATA_DIR": str(tmp / "data"), "TALENTLAB_PROCESSING_MODE": "background", "TALENTLAB_RATE_LIMIT_ENABLED": "false"}
     log = open(tmp / "server.log", "w")
     proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "talentlab.main:app", "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
                             env=env, stdout=log, stderr=log, cwd=str(Path(__file__).resolve().parent.parent))

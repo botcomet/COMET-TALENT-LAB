@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     # --- conservation (à valider avec le DPO : valeur de départ, non approuvée)
     retention_days: int = 180
 
+    # --- maintenance planifiée (désactivée par défaut : la purge automatique attend la validation de la durée de conservation par le DPO)
+    maintenance_interval_hours: float = 0              # 0 = aucune tâche planifiée ; sinon intervalle entre deux passages
+    retention_auto_purge: bool = False                 # purge automatique des documents/candidats expirés (irréversible : à activer après validation DPO)
+    audit_head_path: str = ""                          # si renseigné : la tête de la chaîne d'audit y est écrite à chaque passage (à répliquer HORS de la base)
+
+    # --- limitation de débit applicative (par utilisateur ; la passerelle reste la première ligne de défense)
+    rate_limit_enabled: bool = True
+    rate_limit_general_per_minute: int = 600
+    rate_limit_heavy_per_minute: int = 20              # import de CV, extraction de fichier, assistant, retours d'exécution
+
     # --- IA (optionnelle : l'application fonctionne sans)
     llm_provider: str = "none"                         # none | anthropic
     llm_api_key: str = ""

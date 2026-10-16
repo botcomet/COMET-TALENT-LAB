@@ -32,6 +32,7 @@ def _reset_pg() -> None:
 @pytest.fixture()
 def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TALENTLAB_ENV", "test")
+    monkeypatch.setenv("TALENTLAB_RATE_LIMIT_ENABLED", "false")          # les tests enchaînent des centaines d'appels ; la limitation a ses propres tests
     monkeypatch.setenv("TALENTLAB_DATABASE_URL", PG_URL or f"sqlite:///{tmp_path}/test.db")
     if PG_URL:
         _reset_pg()

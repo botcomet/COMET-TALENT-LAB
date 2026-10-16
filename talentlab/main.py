@@ -13,6 +13,7 @@ from .api.routes import router
 from .config import get_settings
 from .db import init_engine, session_scope
 from .models import User
+from .ratelimit import RateLimit
 from .security import csrf_guard
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
@@ -89,8 +90,12 @@ def create_app() -> FastAPI:
         if s.env in ("dev", "test") and s.auth_mode == "dev":
             seed_demo_users()
         from .services.matching import requeue_stale
+        from .services.maintenance import Scheduler
         requeue_stale()
+        scheduler = Scheduler(s)
+        scheduler.start()
         yield
+        scheduler.stop()
 
     app = FastAPI(title="COMET Talent Lab", version="0.1.0", lifespan=lifespan, docs_url="/api/docs" if s.env in ("dev", "test") else None,
                   redoc_url=None, openapi_url="/api/openapi.json" if s.env in ("dev", "test") else None, dependencies=[Depends(csrf_guard)])
@@ -112,6 +117,7 @@ def create_app() -> FastAPI:
         logging.getLogger("talentlab").exception("Erreur non gérée sur %s %s", request.method, request.url.path)
         return JSONResponse({"detail": "Erreur interne. L'incident a été journalisé."}, status_code=500)
 
+    app.add_middleware(RateLimit, settings_fn=get_settings)
     app.add_middleware(BodyLimit, upload_limit=lambda: get_settings().max_batch_size * get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024,
                        single_file_limit=lambda: get_settings().max_file_mb * 1024 * 1024 + 1024 * 1024)
     if FRONTEND.exists():

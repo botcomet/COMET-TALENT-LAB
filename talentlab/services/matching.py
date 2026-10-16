@@ -469,7 +469,7 @@ def delete_candidate(db: Session, user: User, m: Mission, cand: Candidate) -> No
     db.delete(cand)
 
 
-def purge_expired(db: Session, user: User) -> dict[str, int]:
+def purge_expired(db: Session, actor: User | str) -> dict[str, int]:
     """Suppression selon la politique de conservation configurée (valeur à valider avec le DPO)."""
     today = date.today()
     docs = list(db.scalars(select(Document).where(Document.expires_at.is_not(None), Document.expires_at < today)))
@@ -489,7 +489,7 @@ def purge_expired(db: Session, user: User) -> dict[str, int]:
     for d in docs:
         db.delete(d)
         n_d += 1
-    audit.log(db, user.id, "retention.purge", "system", "", "", documents=n_d, candidates=n_c)
+    audit.log(db, actor if isinstance(actor, str) else actor.id, "retention.purge", "system", "", "", documents=n_d, candidates=n_c)
     return {"documents": n_d, "candidates": n_c}
 
 

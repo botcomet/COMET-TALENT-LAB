@@ -104,7 +104,13 @@ def init_engine(settings: Settings | None = None) -> Engine:
             cur.close()
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     from . import models  # noqa: F401  (enregistre les tables)
-    Base.metadata.create_all(_engine)
+    if s.env == "prod":
+        # production : le schéma est géré par les migrations (jamais créé implicitement) ; une base en retard est un défaut de déploiement
+        from .manage import schema_is_current
+        if not schema_is_current(s.database_url):
+            raise RuntimeError("Schéma de base non à jour : lancer « python -m talentlab.manage migrate » avant de démarrer l'application.")
+    else:
+        Base.metadata.create_all(_engine)
     return _engine
 
 
