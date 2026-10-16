@@ -15,12 +15,13 @@ Navigateur (frontend/, JS natif, aucun build)
    │  JSON + cookie signé (dev) / en-têtes de passerelle (prod) + en-tête CSRF
 FastAPI  talentlab/api/routes.py ── schémas pydantic stricts (extra=forbid) ; intergiciels : limite de corps (BodyLimit), limitation de débit (RateLimit)
    │
-services/   missions · searches · matching · extraction · export · knowledge · assistant · history · maintenance      (orchestration, droits, audit, transactions)
+services/   missions · searches · matching · extraction · export · knowledge · assistant · history · maintenance · boond_import      (orchestration, droits, audit, transactions)
+integrations/ boond (fichier de développement | BigQuery) — LECTURE SEULE, liste fermée de tables et de colonnes
    │
 domain/     brief · requirements · grid · boolean · search_plan · search_optimizer
             cv_extract · evidence · clauses · scoring · qualification · call_facts · claims · safety · coach · lexicon · dossier
    │
-SQLAlchemy 2  models.py (19 tables) + Alembic (migrations/, manage.py)  ──  SQLite (dev/tests) | PostgreSQL 16 (vérifié)
+SQLAlchemy 2  models.py (19 tables) + Alembic (migrations/, 2 révisions, manage.py)  ──  SQLite (dev/tests) | PostgreSQL 16 (vérifié)
                 chiffrement applicatif Fernet sur les champs sensibles (EncText / EncJSON / EncBytes)
 ```
 
@@ -83,6 +84,9 @@ Recherche dans les seules missions possédées ou partagées ; le niveau de part
 
 ### 4.9 Assistant (`services/assistant.py`)
 Questions fermées, réponses fondées sur l'état réel de la mission : explication d'un score (avec alerte si le chiffre cité diffère du score actuel), comparaison, résumé de mission, profils à examiner. « Quels profils écarter ? » ne produit **jamais** de rejet : l'assistant liste les profils les plus éloignés du besoin et rappelle que la décision est humaine et motivée. Toute modification passe par une proposition à confirmer.
+
+### 4.10 Import d'un besoin Boond (`integrations/boond.py`, `services/boond_import.py`)
+Deux adaptateurs derrière une même interface (`list_needs`, `get_need`) : un instantané JSON local (développement, refusé en production) et BigQuery (requêtes `SELECT` paramétrées sur trois tables). Le besoin est recopié sans interprétation (balises retirées) sous des intitulés neutres, puis analysé par la **même** analyse de brief qu'un descriptif collé. La mission porte une référence externe (`external_source`, `external_id`, `external_hash`) avec une **contrainte d'unicité par propriétaire** : la déduplication ne repose pas sur une vérification applicative seule. Un besoin modifié ajoute une source (jamais de réécriture) ; la grille figée n'est pas touchée.
 
 ## 5. Traitement asynchrone
 Les lots de CV sont traités par un **petit pool de threads par utilisateur** (`worker_threads_per_user`, 2), en mode `inline` pour les tests. L'extraction PDF/DOCX se fait dans un **processus enfant isolé** (`services/extraction.py` : mémoire, CPU et temps bornés, tué au-delà de `extraction_timeout_s`). Au démarrage, `requeue_stale` relance les documents restés « en cours » après un arrêt. **Limite connue :** ce n'est pas une file durable multi-instance ; pour un déploiement multi-instances il faut une vraie file de tâches (voir INTEGRATION.md).

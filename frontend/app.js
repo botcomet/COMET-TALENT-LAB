@@ -105,12 +105,44 @@ async function missionList(main, scope) {
       h('td', {}, m.grid_version ? `v${m.grid_version}` : '—'), h('td', {}, fmtDate(m.updated_at))))))));
 }
 
+// Reprise d'un besoin Boond (LECTURE SEULE) : on choisit un besoin, l'application en recopie le titre, la société, le lieu, les dates, la description et les critères.
+function boondPicker() {
+  const q = h('input', { type: 'search', id: 'boond-q', maxlength: 100, placeholder: 'Référence, intitulé ou société', 'aria-label': 'Rechercher un besoin Boond' });
+  const out = h('div', { id: 'boond-list' });
+  const open = id => { location.hash = `#/mission/${id}/needs`; };
+  const run = (n) => guard(async () => {
+    const r = await api('/integrations/boond/import', { method: 'POST', body: { external_id: n.external_id } });
+    toast(r.message);
+    if (r.status !== 'unchanged') open(r.mission.id); else await load();
+  });
+  const load = () => guard(async () => {
+    const r = await api('/integrations/boond/needs?limit=20&q=' + encodeURIComponent(q.value.trim()));
+    clear(out);
+    if (!r.needs.length) return out.append(h('p', { class: 'muted', id: 'boond-empty' }, 'Aucun besoin trouvé.'));
+    out.append(h('div', { class: 'table-wrap' }, h('table', { id: 'boond-table' },
+      h('thead', {}, h('tr', {}, ['Référence', 'Intitulé', 'Société', 'État', 'Modifié', ''].map(x => h('th', {}, x)))),
+      h('tbody', {}, r.needs.map(n => h('tr', { dataset: { id: n.external_id } },
+        h('td', {}, n.reference), h('td', {}, h('b', {}, n.title)), h('td', {}, n.company), h('td', {}, n.state ? chip(n.state, 'grey') : null), h('td', {}, n.updated_at.slice(0, 10)),
+        h('td', {}, n.mission_id
+          ? h('div', { class: 'row' }, chip('Déjà importé', 'ok'), h('button', { class: 'small', onclick: () => open(n.mission_id) }, 'Ouvrir'), h('button', { class: 'small', title: 'Vérifier si le besoin a changé dans Boond', onclick: () => run(n) }, 'Mettre à jour'))
+          : (n.has_text ? h('button', { class: 'small primary', onclick: () => run(n) }, 'Importer') : chip('Descriptif vide dans Boond', 'warn')))))))));
+  });
+  q.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  const card = h('div', { class: 'card', id: 'boond-card' }, h('header', {}, h('h2', {}, 'Reprendre un besoin depuis Boond'), chip('Lecture seule', 'blue')),
+    h('p', { class: 'hint' }, 'Le titre, la société, le lieu, les dates, la description et les critères sont recopiés. Aucun contact, budget, tarif ni candidat n’est lu, et rien n’est écrit dans Boond. ' +
+      'Un besoin déjà importé n’est jamais dupliqué ; s’il a changé dans Boond, une nouvelle source est ajoutée et l’historique est conservé.'),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, q), h('button', { id: 'boond-search', onclick: load }, 'Rechercher')), out);
+  load();
+  return card;
+}
+
 function newMission(main) {
   const client = h('input', { type: 'text', maxlength: 200, placeholder: 'Client (nom interne ou code)' });
   const title = h('input', { type: 'text', maxlength: 300, placeholder: 'Intitulé de la mission', style: undefined });
   const brief = h('textarea', { maxlength: 30000, rows: 14, placeholder: "Coller le descriptif client : contexte, missions, compétences requises / souhaitées, modalités…" });
   const file = fileImporter(brief, { max: 30000, label: 'Importer un descriptif (PDF, Word ou texte)' });
   main.append(h('h1', {}, 'Nouvelle mission'),
+    state.config.boond_import ? boondPicker() : null,
     h('div', { class: 'card' },
       h('div', { class: 'grid cols-2' }, field('Intitulé', title), field('Client', client)),
       field('Descriptif du besoin', brief, "Le titre ne suffit jamais : l'analyse identifie le travail réellement demandé. Rien n'est inventé : une information absente devient une question."),

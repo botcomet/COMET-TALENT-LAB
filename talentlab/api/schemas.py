@@ -32,6 +32,10 @@ class MissionIn(Strict):
     author: str = Field(default="", max_length=200)
 
 
+class BoondImportIn(Strict):
+    external_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class SourceIn(Strict):
     kind: SourceKindName
     text: str = Field(min_length=1, max_length=60_000)

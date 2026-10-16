@@ -18,11 +18,11 @@ Copilote métier des Talent Managers Comet : **analyse de mission → sourcing b
 | **Bibliothèque / Coach** | Enseignements, spécifiques au client tant qu'ils ne sont pas validés ; corrections de recruteur → cas de non-régression ; coach qui explique le raisonnement sans classer les recruteurs. |
 | **Collaboration** | Missions privées par défaut, partage à trois niveaux (stratégie / lecture / édition), historique, assistant qui **propose** et n'applique qu'après confirmation. |
 | **Export** | Matière pour DT Editor (`comet.talentlab.dt-export/v1`) : anonymisée, fidèle au CV, sans technologie ajoutée, provenance interne séparée ; **dossier au format de structuration Comet** (contexte, réalisations en parties thématiques, environnement technique — phrases du CV rangées mot pour mot) téléchargeable ; descriptif pour échange candidat (« Non communiqué » plutôt qu'inventé). |
-| **Descriptif client** | Collé **ou importé depuis un fichier** (PDF, Word, texte) : le texte extrait est relu et corrigé avant l'analyse ; le fichier n'est pas conservé. |
+| **Descriptif client** | Collé, **importé depuis un fichier** (PDF, Word, texte) ou **repris d'un besoin Boond en lecture seule** : le texte est relu avant l'analyse ; un besoin déjà importé n'est jamais dupliqué ; un besoin modifié dans Boond ajoute une nouvelle source (historique conservé). |
 | **Historique** | Recherche transverse dans vos missions et celles partagées avec vous (titres, clients, exigences, requêtes) ; jamais les candidats ni les CV ; le niveau de partage borne la recherche. |
 | **Administration** | (rôle administrateur) comptes, état d'exploitation, purge avec prévisualisation, vérification de l'intégrité du journal d'audit. |
 
-L'application **n'exécute aucune recherche** (le recruteur copie la requête dans Turnover), **n'envoie aucun email**, **ne rejette personne** et **n'est reliée à aucun système externe** (en particulier pas à Boond : décision du 16 octobre 2026).
+L'application **n'exécute aucune recherche** (le recruteur copie la requête dans Turnover), **n'envoie aucun email**, **ne rejette personne**. Son seul lien externe est la **lecture seule des besoins Boond** (désactivée par défaut, voir [docs/INTEGRATION.md](docs/INTEGRATION.md)) : rien n'est jamais écrit dans Boond.
 
 ## Démarrage (développement, données fictives uniquement)
 
@@ -40,9 +40,9 @@ En mode `dev`, l'écran de connexion propose des comptes **fictifs** (`*.demo@ex
 ## Tests
 
 ```bash
-pytest                                      # 379 tests (≈ 75 s) — SQLite ; 1 ignoré hors PostgreSQL
+pytest                                      # 397 tests (≈ 80 s) — SQLite ; 1 ignoré hors PostgreSQL
 pytest -m business                          # 37 tests métier issus du référentiel
-TALENTLAB_TEST_DATABASE_URL=postgresql+psycopg://… pytest tests/test_api_flow.py tests/test_collab_assistant.py tests/test_security_hardening.py tests/test_operations.py tests/test_history_admin.py   # rejoue l'API et les migrations sur PostgreSQL
+TALENTLAB_TEST_DATABASE_URL=postgresql+psycopg://… pytest tests/test_api_flow.py tests/test_collab_assistant.py tests/test_security_hardening.py tests/test_operations.py tests/test_history_admin.py tests/test_boond_link.py   # rejoue l'API et les migrations sur PostgreSQL
 TALENTLAB_E2E_CHROME=/chemin/chrome pytest tests/test_e2e_browser.py                                              # parcours navigateur
 ```
 
@@ -52,7 +52,8 @@ Les tests de navigateur sont **ignorés avec message explicite** si aucun Chromi
 
 ```
 talentlab/domain/    règles métier pures, sans E/S (booléens, grille, preuves, scoring, qualification…)
-talentlab/services/  orchestration (missions, recherches, matching, extraction isolée, export, bibliothèque, assistant, historique, maintenance)
+talentlab/services/  orchestration (missions, recherches, matching, extraction isolée, export, bibliothèque, assistant, historique, maintenance, import Boond)
+talentlab/integrations/ adaptateurs externes en LECTURE SEULE (Boond : fichier de développement ou BigQuery)
 talentlab/api/       FastAPI (schémas stricts, extra=forbid)
 talentlab/llm/       fournisseur d'IA optionnel (désigne des passages ; ne note jamais)
 frontend/            interface sans build (JS natif), contenu dynamique inséré en nœuds texte
@@ -66,7 +67,7 @@ docs/                audit, traçabilité méthodologique, architecture, intégr
 - [docs/AUDIT_COMET.md](docs/AUDIT_COMET.md) — ressources Comet examinées, réutilisées, écartées, non vérifiables
 - [docs/METHODOLOGIE_MAPPING.md](docs/METHODOLOGIE_MAPPING.md) — chaque règle du référentiel → code → test nommé
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — modèle de données, pipelines, décisions de conception
-- [docs/INTEGRATION.md](docs/INTEGRATION.md) — branchements possibles (comet-ai-office, DT Editor, Turnover, SSO ; Boond volontairement non relié) et leur statut réel
+- [docs/INTEGRATION.md](docs/INTEGRATION.md) — branchements (Boond en lecture seule, comet-ai-office, DT Editor, Turnover, SSO) et leur statut réel
 - [docs/SECURITE_RGPD.md](docs/SECURITE_RGPD.md) — contrôles en place, points ouverts DPO / RGPD / AI Act
 - [docs/RECETTE.md](docs/RECETTE.md) — état exact : ce qui est testé, ce qui ne l'est pas, critères d'acceptation
 

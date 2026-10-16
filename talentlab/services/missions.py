@@ -52,16 +52,20 @@ def effective(db: Session, mission_id: str) -> tuple[list[Req], list[Conflict]]:
     return resolve(all_reqs(db, mission_id))
 
 
-def create_mission(db: Session, user: User, client: str, title: str, brief_text: str, *, source_date: date | None = None, author: str = "") -> Mission:
+def create_mission(db: Session, user: User, client: str, title: str, brief_text: str, *, source_date: date | None = None, author: str = "",
+                   label: str = "Brief initial", external: tuple[str, str, str] | None = None) -> Mission:
+    """``external`` = (source, identifiant, empreinte du descriptif) pour un besoin importé en lecture seule ; ``None`` pour une mission saisie dans l'application."""
     if not title.strip():
         raise _bad("Le titre de la mission est obligatoire.")
     if len(brief_text.strip()) < 40:
         raise _bad("Le descriptif est trop court pour être analysé (40 caractères minimum) : coller le brief complet.")
     m = Mission(owner_id=user.id, client=client.strip(), title=title.strip())
+    if external:
+        m.external_source, m.external_id, m.external_hash = external
     db.add(m)
     db.flush()
     audit.log(db, user.id, "mission.create", "mission", m.id, m.id, title=title[:120])
-    _ingest_source(db, user, m, "brief_officiel", brief_text, source_date=source_date, author=author or user.display_name, label="Brief initial")
+    _ingest_source(db, user, m, "brief_officiel", brief_text, source_date=source_date, author=author or user.display_name, label=label)
     return m
 
 

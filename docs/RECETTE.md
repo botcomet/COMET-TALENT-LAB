@@ -1,4 +1,4 @@
-# Recette : état exact au 16 octobre 2026
+# Recette : état exact au 16 octobre 2026 (V1.2 : lien Boond en lecture seule)
 
 Ce document répond à la consigne « si tu ne peux pas tout réaliser, donne l'état exact : code réalisé, tests exécutés, travail restant ». Tout ce qui est marqué **testé** a été exécuté dans l'environnement de développement avec des données **fictives**. Ce qui n'a pas été exécuté est dit.
 
@@ -16,10 +16,11 @@ Ce document répond à la consigne « si tu ne peux pas tout réaliser, donne l'
 | **Dossier au format Comet** | `tests/test_dossier_comet.py` | 10 | domaine pur + API |
 | **Exploitation** : migrations, maintenance planifiée, limitation de débit, `.env.example` | `tests/test_operations.py` | 13 | SQLite ; PostgreSQL 16 pour la migration |
 | **Historique transverse et administration** | `tests/test_history_admin.py` | 10 | SQLite ; rejouée sur PostgreSQL 16 |
-| Parcours navigateur réel (Chromium via Playwright) | `tests/test_e2e_browser.py` | 6 | SQLite, serveur uvicorn réel |
-| **Total** | | **379** | **378 réussis, 1 ignoré** (migration PostgreSQL, rejouée à part), 0 échec (≈ 72 s) |
+| **Lien Boond en lecture seule** (adaptateurs, import, déduplication, minimisation, configuration) | `tests/test_boond_link.py` | 16 | SQLite ; rejouée sur PostgreSQL 16 |
+| Parcours navigateur réel (Chromium via Playwright) | `tests/test_e2e_browser.py` | 8 | SQLite, serveurs uvicorn réels (dont un avec l'import Boond sur instantané fictif) |
+| **Total** | | **397** | **396 réussis, 1 ignoré** (migration PostgreSQL, rejouée à part), 0 échec (≈ 80 s) |
 
-Sur PostgreSQL 16 (cluster local, base jetable) : `test_api_flow`, `test_collab_assistant`, `test_security_hardening`, `test_operations`, `test_history_admin` rejoués — **118 réussis, 1 ignoré** (vérification propre au fichier SQLite) ; la migration est comparée au modèle sur PostgreSQL ; le test « aucune donnée en clair dans aucune ligne » tourne sur les deux moteurs. 37 tests portent le marqueur `business` (cas métier issus du référentiel).
+Sur PostgreSQL 16 (cluster local, base jetable) : `test_api_flow`, `test_collab_assistant`, `test_security_hardening`, `test_operations`, `test_history_admin`, `test_boond_link` rejoués — **134 réussis, 1 ignoré** (vérification propre au fichier SQLite) ; la migration est comparée au modèle sur PostgreSQL ; le test « aucune donnée en clair dans aucune ligne » tourne sur les deux moteurs. 37 tests portent le marqueur `business` (cas métier issus du référentiel).
 
 > Le code de sortie de la suite complète est **0** ; il est lu directement (et non via un filtre qui le masquerait : une validation précédente avait été commitée avec un test en échec pour cette raison, corrigée depuis).
 
@@ -65,6 +66,24 @@ La première tentative a échoué sur une limite de débit ; je l'ai relancée s
 
 Défauts trouvés **par mes tests ou ma propre relecture** pendant cette phase, corrigés : (1) l'entrée « Historique » faisait **déborder la barre de navigation de 84 px sur mobile** (test de bout en bout) ; (2) un menu « Rôle » restait sur une valeur refusée par le serveur (relecture ; vérifié ensuite par un test navigateur) ; (3) l'alerte « score cité » prenait « le 15 octobre » ou « 12 ans » pour un score ; (4) la création de compte acceptait une adresse sans forme d'adresse ; (5) un marqueur de test `sqlite_only` sans effet laissait croire qu'un test était exclu de PostgreSQL. **Je n'ai pas relancé de revue indépendante sur ces évolutions** : seule ma propre relecture adverse a eu lieu.
 
+### 2.4 Lien Boond en lecture seule (V1.2, 16 octobre 2026)
+Sur instruction explicite de relier l'application à Boond pour la tester avec ses données (levée de la consigne « sans Boond » du même jour), j'ai construit un **import des besoins en lecture seule** (voir [INTEGRATION.md §5](INTEGRATION.md#5-boond--lecture-seule-des-besoins)) : adaptateur BigQuery (liste fermée de tables et de colonnes, `SELECT` paramétrés, aucun contact/budget/tarif/CV/candidat), adaptateur « fichier » de développement, référence externe sur les missions avec **contrainte d'unicité** (migration `0002`), déduplication, révisions sans réécriture, écran d'import. Désactivé par défaut.
+
+| Ce qui est **vérifié** | Comment |
+|---|---|
+| Rien n'est écrit dans Boond ; seules des lectures de colonnes autorisées sont émises ; le texte utilisateur est un paramètre lié | requêtes capturées et inspectées ; refus de tous les mots d'écriture |
+| Un besoin n'est jamais dupliqué, même sous imports simultanés | test avec 6 requêtes parallèles, sur SQLite **et** PostgreSQL ; **mutation** : sans la contrainte d'unicité, le doublon passe et le test échoue |
+| Un besoin modifié ajoute une source sans toucher une grille figée | test d'API |
+| Un besoin sans descriptif exploitable est refusé, pas complété | test d'API + interface |
+| Les erreurs d'infrastructure ne fuient aucun détail | exécuteur simulé qui lève une erreur contenant un « secret » |
+| Le dépôt public ne contient aucun identifiant réel (projet, dataset, compte) | test qui parcourt le code, l'interface et la documentation |
+
+| Ce qui n'est **pas** vérifié | |
+|---|---|
+| **Exécution de l'adaptateur BigQuery par l'application contre l'entrepôt réel** | Aucun identifiant applicatif dans cet environnement ; les identifiants du connecteur de développement ne sont pas ceux de l'application. La bibliothèque `google-cloud-bigquery` n'est pas installée ici : l'adaptateur n'a été exercé qu'avec un exécuteur simulé |
+| **Essai avec les données réelles de la sandbox** | **Non réalisé** : la lecture de lignes de besoins depuis BigQuery a été refusée trois fois par le contrôle automatique des données personnelles (même sans noms de sociétés) ; je ne l'ai pas contournée. Côté BigQuery, seuls des métadonnées et des comptages ont été lus ; côté connecteur de la sandbox Boond, une fiche d'exemple par module (besoins, positionnements, sociétés) pour comparer des totaux. Aucun contenu n'est conservé dans le dépôt |
+| Qualité de l'analyse sur de vrais besoins Boond | Inconnue : aucun vrai besoin n'a été analysé |
+
 ## 3. Critères d'acceptation (§28) — « je dois pouvoir »
 
 | # | Critère | Preuve |
@@ -107,7 +126,7 @@ Les 15 sont implantés et passent. Tableau détaillé dans [METHODOLOGIE_MAPPING
 | Syntaxe réelle de Turnover | **Non confirmée** (`syntax_confirmed=False`) ; requêtes jamais exécutées sur Turnover. « Trop large / trop restrictif » vient du retour saisi par le recruteur, jamais d'une estimation |
 | Fournisseur d'IA (Anthropic) | Code écrit, **jamais appelé en réel** ; la vérification par citation est testée avec un faux fournisseur |
 | SSO Comet réel | Contrat de passerelle testé avec une passerelle **simulée** ; comportement réel sur en-têtes dupliqués, limite de corps, joignabilité directe : **non vérifiable** ici |
-| **Boond / BigQuery** | **Volontairement non reliés** (décision du 16 octobre 2026) : ni lecture, ni écriture, aucun identifiant Boond dans le code |
+| **Boond / BigQuery** | **Reliés en lecture seule (besoins), désactivé par défaut**, code et tests prêts ; **jamais exécuté contre l'entrepôt réel par l'application** (voir §2.4). Aucune écriture dans Boond n'existe |
 | Drive / Notion / Granola / Noota / DT Editor / Turn | **Aucun accès utilisé** |
 | OCR, audio | **Non supportés** : échec explicite pour un PDF sans couche texte |
 | Pertinence métier sur de vraies populations | **Non mesurée** (ni précision, ni rappel). Les règles de portée sont des motifs lexicaux FR/EN ; seuils et facteurs = valeurs de départ défendues par des cas, **non calibrées** |

@@ -19,7 +19,9 @@ from ..models import (Assessment, AuditEvent, CallNote, Candidate, Document, Evi
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from ..security import (COOKIE, access_level, clear_session, dev_auth_allowed, current_user, issue_session, mission_dep, require_admin, require_mission)
 from ..enums_app import CANDIDATE_SOURCE_KINDS
+from ..integrations import boond as bd
 from ..services import assistant as asst
+from ..services import boond_import as bimp
 from ..services import history as hist
 from ..services import export as exp
 from ..services import knowledge as kn
@@ -131,7 +133,7 @@ def config(user: User = Depends(current_user)):
     return {"max_batch_size": s.max_batch_size, "max_file_mb": s.max_file_mb, "platform": s.platform, "platform_max_length": s.platform_max_length,
             "result_target_min": s.result_target_min, "result_target_max": s.result_target_max, "result_too_broad": s.result_too_broad,
             "very_interesting_min": s.very_interesting_min, "work_view_min": s.work_view_min, "retention_days": s.retention_days,
-            "retention_note": "Durée de départ — à valider avec le DPO.", "llm_provider": s.llm_provider,
+            "retention_note": "Durée de départ — à valider avec le DPO.", "llm_provider": s.llm_provider, "boond_import": s.boond_source != "none",
             "syntax_confirmed": False, "syntax_note": bl.TURNOVER.notes}
 
 
@@ -684,6 +686,36 @@ def library_retire(eid: str, db: Session = Depends(get_db), user: User = Depends
 @router.get("/library/regression-cases")
 def regression_cases(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return kn.regression_cases(db, user)
+
+
+# ----------------------------------------------------------------- Boond (lecture seule)
+def _boond_source():
+    try:
+        src = bd.build_source(get_settings())
+    except bd.BoondError as e:
+        raise HTTPException(502, str(e))
+    if src is None:
+        raise HTTPException(404, "L'intégration Boond n'est pas activée sur cette instance.")
+    return src
+
+
+@router.get("/integrations/boond/status")
+def boond_status(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    s = get_settings()
+    n = db.scalar(select(func.count(Mission.id)).where(Mission.owner_id == user.id, Mission.external_source == bd.SOURCE_NAME)) or 0
+    return {"enabled": s.boond_source != "none", "source": s.boond_source, "read_only": True, "writes_to_boond": False, "imported_by_you": n,
+            "note": "Lecture seule : titre, société, lieu, dates, description et critères des besoins. Aucun contact, budget, tarif, responsable ni candidat n'est lu ; rien n'est écrit dans Boond."}
+
+
+@router.get("/integrations/boond/needs")
+def boond_needs(q: str = Query("", max_length=100), limit: int = Query(20, ge=1, le=bd.MAX_LIST), offset: int = Query(0, ge=0, le=100_000),
+                db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return bimp.list_needs(db, user, _boond_source(), q, limit, offset)
+
+
+@router.post("/integrations/boond/import")
+def boond_import(body: S.BoondImportIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return bimp.import_need(db, user, _boond_source(), body.external_id)
 
 
 # ----------------------------------------------------------------- historique (recherche transverse)

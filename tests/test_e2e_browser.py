@@ -59,6 +59,35 @@ def server(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def boond_server(tmp_path_factory):
+    """Second serveur, avec l'import Boond activé sur un instantané ENTIÈREMENT FICTIF (aucune donnée réelle)."""
+    import json
+    from tests.test_boond_link import NEEDS, SCHEMA
+    tmp = tmp_path_factory.mktemp("e2e_boond")
+    snap = tmp / "needs.json"
+    snap.write_text(json.dumps({"schema": SCHEMA, "needs": NEEDS}, ensure_ascii=False), encoding="utf-8")
+    port = _free_port()
+    env = {**os.environ, "TALENTLAB_ENV": "test", "TALENTLAB_AUTH_MODE": "dev", "TALENTLAB_DATABASE_URL": f"sqlite:///{tmp}/e2e.db", "TALENTLAB_DATA_DIR": str(tmp / "data"),
+           "TALENTLAB_PROCESSING_MODE": "background", "TALENTLAB_RATE_LIMIT_ENABLED": "false", "TALENTLAB_BOOND_SOURCE": "file", "TALENTLAB_BOOND_SNAPSHOT_PATH": str(snap)}
+    log = open(tmp / "server.log", "w")
+    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "talentlab.main:app", "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
+                            env=env, stdout=log, stderr=log, cwd=str(Path(__file__).resolve().parent.parent))
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            if httpx.get(base + "/api/health", timeout=1).status_code == 200:
+                break
+        except httpx.HTTPError:
+            time.sleep(0.2)
+    else:
+        proc.kill()
+        pytest.fail("Le serveur Boond de test n'a pas démarré : " + (tmp / "server.log").read_text()[-800:])
+    yield base
+    proc.terminate()
+    proc.wait(timeout=10)
+
+
+@pytest.fixture(scope="module")
 def browser():
     with playwright_sync.sync_playwright() as p:
         b = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
@@ -103,7 +132,6 @@ def test_full_user_journey_in_a_real_browser(server, browser, tmp_path):
     page.wait_for_selector("#req-table tbody tr")
     assert page.locator("text=Ce que la mission demande réellement").is_visible()
     assert page.locator("#req-table tbody tr").count() >= 8
-    assert page.locator("text=Non validée").count() == 0 or True
     assert page.locator("#req-table >> text=À valider").count() >= 5, "toutes les exigences sont proposées, aucune validée d'office"
     assert page.locator("dl.kv >> text=Châtillon").count() == 1
     _shot(page, "02-besoin-criteres")
@@ -307,7 +335,6 @@ def test_html_injection_in_cv_and_notes_is_rendered_as_text(server, browser, tmp
     page.locator("#crit-table summary", has_text="Preuves").first.click()
     assert page.evaluate("window.__pwned") is None
     assert page.locator("main img").count() == 0 and page.locator("main script").count() == 0
-    assert "<img" in page.locator("main").inner_text() or True
     ctx.close()
 
 
@@ -391,4 +418,43 @@ def test_admin_screen_in_the_browser_creates_deactivates_and_verifies_the_audit_
     assert "secret" not in page.inner_text("#admin-status").lower()
     _shot(page, "admin")
     assert not [p for p in problems if "Content Security Policy" in p or "pageerror" in p], problems
+    ctx.close()
+
+
+def test_importing_a_boond_need_from_the_new_mission_screen_is_read_only_deduplicated_and_explained(boond_server, browser):
+    ctx, page, problems = _login(browser, boond_server, "TM Démo 1")
+    page.get_by_role("button", name=re.compile("Nouvelle mission")).first.click()
+    page.locator("#boond-table").wait_for()
+    assert page.locator("#boond-table tbody tr").count() == 4
+    assert "Lecture seule" in page.inner_text("#boond-card") and "rien n’est écrit dans Boond" in page.inner_text("#boond-card")
+    # un besoin sans descriptif ne peut pas être importé : l'interface l'explique au lieu de proposer un import voué à l'échec
+    empty = page.locator("#boond-table tbody tr[data-id='9002']")
+    assert "Descriptif vide dans Boond" in empty.inner_text() and empty.get_by_role("button").count() == 0
+    # recherche puis import
+    page.fill("#boond-q", "data engineer")
+    page.click("#boond-search")
+    playwright_sync.expect(page.locator("#boond-table tbody tr")).to_have_count(1)          # attente automatique : le filtre est appliqué par le serveur
+    page.locator("#boond-table tbody tr[data-id='9004']").get_by_role("button", name="Importer").click()
+    page.wait_for_url(re.compile(r"#/mission/.+/needs"))
+    page.locator("h1", has_text="Data Engineer").wait_for()
+    _shot(page, "boond-import")
+    # retour : le besoin est signalé comme déjà importé, sans doublon
+    page.locator("#topbar nav a", has_text="Mes missions").click()
+    page.locator("tr.clickable", has_text="Data Engineer").wait_for()
+    assert page.locator("tr.clickable", has_text="Data Engineer").count() == 1
+    page.goto(boond_server + "/#/new")
+    page.locator("#boond-table").wait_for()
+    row = page.locator("#boond-table tbody tr[data-id='9004']")
+    assert "Déjà importé" in row.inner_text()
+    row.get_by_role("button", name="Mettre à jour").click()
+    page.locator(".toast", has_text="n'a pas changé").wait_for()
+    assert not [p for p in problems if "Content Security Policy" in p or "pageerror" in p], problems
+    ctx.close()
+
+
+def test_the_boond_card_is_absent_when_the_integration_is_not_enabled(server, browser):
+    ctx, page, problems = _login(browser, server, "TM Démo 1")
+    page.get_by_role("button", name=re.compile("Nouvelle mission")).first.click()
+    page.locator("textarea").wait_for()
+    assert page.locator("#boond-card").count() == 0
     ctx.close()

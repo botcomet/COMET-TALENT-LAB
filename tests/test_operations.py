@@ -19,7 +19,7 @@ def _url(tmp_path):
 def test_migrations_build_exactly_the_schema_of_the_models(tmp_path):
     url = _url(tmp_path)
     rev = manage.migrate(url)
-    assert rev == "0001" and manage.schema_is_current(url)
+    assert rev == "0002" and manage.schema_is_current(url)
     eng = create_engine(url)
     with eng.connect() as c:
         diff = compare_metadata(MigrationContext.configure(c, opts={"compare_type": True}), Base.metadata)

@@ -43,6 +43,11 @@ class Mission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     retention_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Référence externe (besoin importé depuis Boond en LECTURE SEULE) : NULL pour une mission saisie dans l'application.
+    external_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)       # empreinte du descriptif importé : détecte une révision côté Boond
+    __table_args__ = (UniqueConstraint("owner_id", "external_source", "external_id", name="uq_mission_external"),)
 
 
 class MissionSource(Base):

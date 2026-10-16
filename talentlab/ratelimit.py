@@ -9,7 +9,7 @@ import hashlib
 import time
 from collections import deque
 
-_HEAVY_SUFFIXES = ("/cvs", "/tools/extract-text", "/assistant", "/feedback", "/auth/dev-login")
+_HEAVY_SUFFIXES = ("/cvs", "/tools/extract-text", "/assistant", "/feedback", "/auth/dev-login", "/boond/import")
 
 
 def _identity(scope) -> str:

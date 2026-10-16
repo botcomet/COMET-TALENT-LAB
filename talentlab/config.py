@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     rate_limit_general_per_minute: int = 600
     rate_limit_heavy_per_minute: int = 20              # import de CV, extraction de fichier, assistant, retours d'exécution
 
+    # --- Boond : LECTURE SEULE des besoins (désactivé par défaut). Aucune valeur d'identification n'est écrite dans le dépôt : tout vient de l'environnement.
+    boond_source: str = "none"                         # none | file (instantané local, développement/tests seulement) | bigquery
+    boond_snapshot_path: str = ""                      # source « file » : chemin de l'instantané JSON (hors Git)
+    boond_bq_project: str = ""                         # source « bigquery » : projet de la copie Boond
+    boond_bq_dataset: str = ""                         # source « bigquery » : dataset de la copie Boond
+    boond_bq_max_bytes: int = 100_000_000              # plafond d'octets facturés par requête
+
     # --- IA (optionnelle : l'application fonctionne sans)
     llm_provider: str = "none"                         # none | anthropic
     llm_api_key: str = ""
@@ -81,6 +88,29 @@ class Settings(BaseSettings):
         if e not in ("dev", "test", "prod"):
             raise ValueError(f"TALENTLAB_ENV « {v} » inconnu : valeurs admises dev, test, prod (une valeur de production non reconnue ne doit jamais activer le mode de développement).")
         return e
+
+    @field_validator("boond_source", mode="before")
+    @classmethod
+    def _boond_source(cls, v: str) -> str:
+        s = str(v).strip().lower()
+        if s not in ("none", "file", "bigquery"):
+            raise ValueError(f"TALENTLAB_BOOND_SOURCE « {v} » inconnu : valeurs admises none, file, bigquery.")
+        return s
+
+    @model_validator(mode="after")
+    def _guard_boond(self) -> "Settings":
+        if self.boond_source == "file":
+            if self.env == "prod":
+                raise ValueError("TALENTLAB_BOOND_SOURCE=file est réservé au développement et aux tests : refusé en production.")
+            if not self.boond_snapshot_path:
+                raise ValueError("TALENTLAB_BOOND_SNAPSHOT_PATH est obligatoire avec TALENTLAB_BOOND_SOURCE=file.")
+        if self.boond_source == "bigquery":
+            from .integrations.boond import valid_dataset, valid_project
+            if not (valid_project(self.boond_bq_project) and valid_dataset(self.boond_bq_dataset)):
+                raise ValueError("TALENTLAB_BOOND_BQ_PROJECT et TALENTLAB_BOOND_BQ_DATASET valides sont obligatoires avec TALENTLAB_BOOND_SOURCE=bigquery.")
+        if self.boond_bq_max_bytes < 1_000_000 or self.boond_bq_max_bytes > 10_000_000_000:
+            raise ValueError("TALENTLAB_BOOND_BQ_MAX_BYTES doit être compris entre 1 Mo et 10 Go.")
+        return self
 
     @model_validator(mode="after")
     def _guard(self) -> "Settings":

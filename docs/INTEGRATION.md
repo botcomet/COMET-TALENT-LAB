@@ -8,7 +8,7 @@ Principe : Talent Lab **ne reconstruit pas** ce qui existe déjà chez Comet. Il
 | `comet-ai-office` | **Non branché.** Audité (voir AUDIT_COMET.md) | Décision Tech : remplacer son scoring/booléens par des appels à l'API Talent Lab |
 | DT Editor | **Introuvable** dans les dépôts accessibles ; export JSON prêt (`comet.talentlab.dt-export/v1`), **non consommé par un vrai DT Editor** | Valider le format avec les concepteurs de DT Editor |
 | Turnover | **Aucune connexion.** Profil de plateforme 250 caractères, `syntax_confirmed=False` | Tester les requêtes générées sur Turnover avec un recruteur ; confirmer opérateurs, guillemets, jokers, limite réelle |
-| Boond / BigQuery | **Volontairement non relié** (décision du 16 octobre 2026 : aucune liaison avec Boond dans cette phase ; aucune lecture, aucune écriture, aucun identifiant Boond stocké) | Quand la liaison sera autorisée : définir lecture seule ou écriture, périmètre, identifiant de référence. Aujourd'hui le brief est collé ou importé depuis un fichier (PDF, Word, texte) |
+| Boond (besoins) | **Branché en lecture seule, désactivé par défaut.** Adaptateur BigQuery écrit et testé avec un exécuteur simulé ; **jamais exécuté par l'application contre l'entrepôt réel** (aucun identifiant applicatif dans l'environnement de développement) ; adaptateur « fichier » pour le développement. Rien n'est jamais écrit dans Boond | Compte de service applicatif en lecture sur 3 tables, essai sur la copie de test, validation par la sécurité et le DPO avant tout usage réel (voir §5) |
 | Granola / Noota (transcriptions) | **Non connectés.** Le texte collé est accepté (`transcription`, marqué « à vérifier ») | Importer automatiquement ; garder le plafond « partiel » tant que non validé |
 | Constellation (identité visuelle) | Conventions de couleurs/typographie reprises à la main ; **aucune dépendance** | Remplacer par la bibliothèque commune si Tech le souhaite |
 | Fournisseur d'IA | Interface + fournisseur Anthropic **écrits, jamais appelés en réel** ; désactivé par défaut | Autorisation de coût et de traitement de données ; contrat de sous-traitance ; essai sur données fictives |
@@ -59,7 +59,7 @@ Garanties vérifiées par test (`test_acceptance_export_for_dt_editor_is_anonymi
 ## 3. Brancher Talent Lab sur `comet-ai-office` (proposition)
 
 1. `analyzeCandidate` / `buildBooleanStrategies` appellent `POST /api/missions/{id}/searches/generate` et `…/candidates/{cid}` de Talent Lab (service à service, secret partagé).
-2. *(Différé — pas de liaison Boond pour le moment.)* Plus tard, les missions pourraient être créées côté Talent Lab à partir du brief Boond, l'identifiant Boond étant stocké comme référence externe (champ à ajouter, absent aujourd'hui). D'ici là, la création reste manuelle : brief collé ou fichier importé.
+2. Les missions peuvent être créées côté Talent Lab à partir d'un besoin Boond **en lecture seule** (voir §5) ; l'identifiant Boond est stocké comme référence externe (`missions.external_source`, `external_id`). Une écriture dans Boond n'est pas implémentée.
 3. Les recherches Turn restent exécutées par `comet-ai-office` ; Talent Lab ne reçoit que le retour (volume, pertinence).
 4. Prérequis : recette sur données autorisées, décision de Tech sur la propriété du code, adaptateur Python dans la CI de sécurité (voir AUDIT_COMET.md §5).
 
@@ -73,3 +73,23 @@ Garanties vérifiées par test (`test_acceptance_export_for_dt_editor_is_anonymi
 - **Limitation de débit** par utilisateur (600 requêtes/min, 20/min pour les opérations lourdes) : garde-fou applicatif en plus de celui de la passerelle ; état en mémoire du processus (non partagé entre instances).
 - **Journalisation** applicative vers la pile d'observabilité Comet, sans contenu de CV (déjà garanti pour le journal d'audit ; à vérifier pour les journaux du serveur HTTP).
 - **Empaquetage** (image conteneur, CI, scan de dépendances Python) : **non réalisé et non vérifié** dans cette version.
+
+## 5. Boond — lecture seule des besoins
+
+**Ce qui est lu** (liste fermée, vérifiée par test) : table des besoins (`TAB_AO` : référence, intitulé, description, critères, lieu, dates, état, visibilité), nom de la société cliente (`TAB_CRMSOCIETE`), libellé d'état (`ref_etat_besoin`). **Ce qui n'est jamais lu** : contacts, responsables, budgets, chiffres d'affaires, tarifs, CV, profils, candidats, positionnements, données bancaires ou contractuelles. **Rien n'est écrit dans Boond** : l'adaptateur n'émet que des `SELECT` (refus de tout mot d'écriture), le texte saisi par l'utilisateur est lié en paramètre, le coût de chaque requête est plafonné (`TALENTLAB_BOOND_BQ_MAX_BYTES`).
+
+**Configuration** (aucune valeur réelle dans le dépôt, qui est public) :
+
+```
+TALENTLAB_BOOND_SOURCE=bigquery            # none (défaut) | file (développement/tests, refusé en production) | bigquery
+TALENTLAB_BOOND_BQ_PROJECT=<projet de la copie Boond>
+TALENTLAB_BOOND_BQ_DATASET=<dataset de la copie Boond>
+```
+
+**Identifiants** : l'application utilise le compte de service de **son** environnement d'exécution, avec le rôle de lecture sur ces trois tables et le droit d'exécuter des requêtes. Les connexions mises à disposition de l'assistant de développement ne sont **pas** des identifiants applicatifs et ne doivent pas être réutilisées.
+
+**Comportement** : l'écran « Nouvelle mission » propose de rechercher un besoin et de l'importer. La mission créée est **privée** à son importateur ; la référence Boond sert de clé de déduplication par utilisateur (contrainte d'unicité en base : deux imports simultanés ne créent qu'une mission). Un besoin inchangé n'est pas réimporté ; un besoin modifié dans Boond ajoute une **nouvelle source** (les sources sont immuables, l'historique est conservé) et **ne modifie jamais une grille figée**. Un besoin **sans descriptif exploitable** (moins de 40 caractères de description et de critères) est **refusé** plutôt que complété : rien n'est inventé. Les « critères » saisis dans Boond sont rangés sous « Profil recherché » et ne sont jamais promus d'office en impératifs.
+
+**Vérifié par test** (`tests/test_boond_link.py`, navigateur) : désactivé par défaut ; liste, recherche, pagination ; import, déduplication, révision ; confidentialité entre utilisateurs ; liste fermée de tables et de colonnes ; paramètres liés ; refus des écritures ; erreurs d'infrastructure génériques (502 sans détail) ; configuration fermée (source `file` refusée en production) ; absence d'identifiant réel dans le dépôt.
+
+**Non vérifié** : exécution de l'adaptateur BigQuery contre l'entrepôt réel par l'application ; droits exacts du compte de service ; volumétrie et coût réels ; comportement avec des descriptions longues ou riches en HTML réel ; fraîcheur de la copie (rechargée par un processus tiers, sans garantie documentée). Le champ « société » est repris tel quel de Boond.
