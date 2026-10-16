@@ -122,7 +122,7 @@ function boondPicker() {
     out.append(h('div', { class: 'table-wrap' }, h('table', { id: 'boond-table' },
       h('thead', {}, h('tr', {}, ['Référence', 'Intitulé', 'Société', 'État', 'Modifié', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, r.needs.map(n => h('tr', { dataset: { id: n.external_id } },
-        h('td', {}, n.reference), h('td', {}, h('b', {}, n.title)), h('td', {}, n.company), h('td', {}, n.state ? chip(n.state, 'grey') : null), h('td', {}, n.updated_at.slice(0, 10)),
+        h('td', {}, n.reference), h('td', {}, h('b', {}, n.title)), h('td', {}, n.company), h('td', {}, n.state ? chip(n.state, 'grey') : null), h('td', { class: 'nowrap' }, n.updated_at.slice(0, 10)),
         h('td', {}, n.mission_id
           ? h('div', { class: 'row' }, chip('Déjà importé', 'ok'), h('button', { class: 'small', onclick: () => open(n.mission_id) }, 'Ouvrir'), h('button', { class: 'small', title: 'Vérifier si le besoin a changé dans Boond', onclick: () => run(n) }, 'Mettre à jour'))
           : (n.has_text ? h('button', { class: 'small primary', onclick: () => run(n) }, 'Importer') : chip('Descriptif vide dans Boond', 'warn')))))))));

@@ -90,6 +90,21 @@ TALENTLAB_BOOND_BQ_DATASET=<dataset de la copie Boond>
 
 **Comportement** : l'écran « Nouvelle mission » propose de rechercher un besoin et de l'importer. La mission créée est **privée** à son importateur ; la référence Boond sert de clé de déduplication par utilisateur (contrainte d'unicité en base : deux imports simultanés ne créent qu'une mission). Un besoin inchangé n'est pas réimporté ; un besoin modifié dans Boond ajoute une **nouvelle source** (les sources sont immuables, l'historique est conservé) et **ne modifie jamais une grille figée**. Un besoin **sans descriptif exploitable** (moins de 40 caractères de description et de critères) est **refusé** plutôt que complété : rien n'est inventé. Les « critères » saisis dans Boond sont rangés sous « Profil recherché » et ne sont jamais promus d'office en impératifs.
 
+**Lancer l'application sur un instantané de développement** (source `file`, jamais en production). L'instantané est un fichier JSON **hors Git** (le dossier `data/` est ignoré) :
+
+```json
+{"schema": "comet.talentlab.boond-needs-snapshot/v1", "exported_at": "AAAA-MM-JJ",
+ "needs": [{"external_id": "…", "reference": "…", "title": "…", "company": "…", "state": "…", "updated_at": "…", "created_at": "…",
+            "description": "…", "criteria": "…", "place": "…", "start": "…", "end": "…"}]}
+```
+
+```bash
+TALENTLAB_BOOND_SOURCE=file TALENTLAB_BOOND_SNAPSHOT_PATH=./data/boond-needs-snapshot.json \
+TALENTLAB_DATABASE_URL=sqlite:///./data/talentlab-demo.db uvicorn talentlab.main:app --port 8765
+```
+
+Tout champ non prévu (contact, budget, responsable…) fait refuser le fichier. Utiliser une base de développement neuve : en développement les tables sont créées sans migration.
+
 **Vérifié par test** (`tests/test_boond_link.py`, navigateur) : désactivé par défaut ; liste, recherche, pagination ; import, déduplication, révision ; confidentialité entre utilisateurs ; liste fermée de tables et de colonnes ; paramètres liés ; refus des écritures ; erreurs d'infrastructure génériques (502 sans détail) ; configuration fermée (source `file` refusée en production) ; absence d'identifiant réel dans le dépôt.
 
 **Non vérifié** : exécution de l'adaptateur BigQuery contre l'entrepôt réel par l'application ; droits exacts du compte de service ; volumétrie et coût réels ; comportement avec des descriptions longues ou riches en HTML réel ; fraîcheur de la copie (rechargée par un processus tiers, sans garantie documentée). Le champ « société » est repris tel quel de Boond.

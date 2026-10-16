@@ -81,8 +81,15 @@ Sur instruction explicite de relier l'application à Boond pour la tester avec s
 | Ce qui n'est **pas** vérifié | |
 |---|---|
 | **Exécution de l'adaptateur BigQuery par l'application contre l'entrepôt réel** | Aucun identifiant applicatif dans cet environnement ; les identifiants du connecteur de développement ne sont pas ceux de l'application. La bibliothèque `google-cloud-bigquery` n'est pas installée ici : l'adaptateur n'a été exercé qu'avec un exécuteur simulé |
-| **Essai avec les données réelles de la sandbox** | **Non réalisé** : la lecture de lignes de besoins depuis BigQuery a été refusée trois fois par le contrôle automatique des données personnelles (même sans noms de sociétés) ; je ne l'ai pas contournée. Côté BigQuery, seuls des métadonnées et des comptages ont été lus ; côté connecteur de la sandbox Boond, une fiche d'exemple par module (besoins, positionnements, sociétés) pour comparer des totaux. Aucun contenu n'est conservé dans le dépôt |
-| Qualité de l'analyse sur de vrais besoins Boond | Inconnue : aucun vrai besoin n'a été analysé |
+| **Lecture de lignes de besoins depuis BigQuery** | **Refusée** trois fois par le contrôle automatique des données personnelles (même sans noms de sociétés) ; je ne l'ai pas contournée. Côté BigQuery, seuls des métadonnées et des comptages ont été lus |
+| Qualité de l'analyse sur de vrais besoins Boond | Inconnue : seuls des besoins de la sandbox (données de test) ont été analysés |
+
+**Essai sur les données de la sandbox Boond (données de test, instantané local hors Git).** À la demande de l'utilisateur (« données fictives sur la sandbox, je veux que cela fonctionne »), les besoins ont été lus par le connecteur de la sandbox Boond, rangés dans un instantané local au format `file`, et l'application a été lancée dessus (navigateur et API). Résultats mesurés :
+
+- **200 besoins listés ; 13 seulement ont un descriptif exploitable** (≥ 40 caractères de description et de critères) d'après un comptage BigQuery ; 12 figurent avec leur texte dans l'instantané (une fiche n'a pas pu être lue). Les autres s'affichent « Descriptif vide dans Boond » et ne sont pas importables. La plupart sont des coquilles de test.
+- **Les 12 importés sans erreur**, missions privées, source étiquetée « Boond (lecture seule) », aucune donnée de contact, de budget ou de tarif conservée.
+- **Ce que l'analyse en tire est très inégal** : de 0 à 9 exigences par besoin. Les besoins courts et de test ne donnent aucune exigence (informations manquantes listées à la place : rien n'est inventé). Un besoin à 50 critères saisis un par ligne n'en donne que 5, parce que seuls les termes connus du lexique interne (~80 entrées) deviennent des exigences ; le reste des lignes n'est **pas repris** comme exigence. C'est une limite réelle, non corrigée : à décider avec les recruteurs (reprendre chaque critère Boond comme exigence « à clarifier » ?).
+- **Ce chemin utilise la source `file`** : il n'éprouve pas l'adaptateur BigQuery de l'application (voir ci-dessus).
 
 ## 3. Critères d'acceptation (§28) — « je dois pouvoir »
 
